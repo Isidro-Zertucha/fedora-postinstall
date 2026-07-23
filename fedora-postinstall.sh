@@ -115,7 +115,7 @@ REAL_HOME=$(getent passwd "$REAL_USER" | cut -d: -f6)
 as_user() { sudo -u "$REAL_USER" bash -c "$1"; }
 
 has_nvidia_gpu() { lspci -nn | grep -Ei 'vga|3d' | grep -qi nvidia; }
-has_amd_gpu()    { lspci -nn | grep -Ei 'vga|3d' | grep -qi 'amd\|radeon'; }
+has_amd_gpu()    { lspci -nn | grep -Ei 'vga|3d' | grep -qEi 'amd|radeon'; }
 has_intel_gpu()  { lspci -nn | grep -Ei 'vga|3d' | grep -qi intel; }
 has_gnome()      { rpm -q gnome-shell >/dev/null 2>&1; }
 has_kde()        { rpm -q plasma-desktop >/dev/null 2>&1 || rpm -q plasma-workspace >/dev/null 2>&1; }
@@ -190,10 +190,9 @@ section_base() {
     set_dnf_opt max_parallel_downloads "$pdl"
     ok "dnf: max_parallel_downloads=$pdl"
 
-    if ! grep -q "defaultyes" /etc/dnf/dnf.conf; then
-        echo "defaultyes=True" >> /etc/dnf/dnf.conf
-        ok "dnf: default to yes"
-    fi
+    # NOTE: we deliberately do NOT set defaultyes=True. Every dnf call here
+    # already passes -y; flipping the global default would silently auto-confirm
+    # every future dnf command on this system (a footgun for later 'dnf remove').
 
     step "Full system update" dnf -y upgrade --refresh
 
@@ -690,6 +689,9 @@ section_apps() {
 # ---------------------------------------------------------------------------
 # Argument parsing
 # ---------------------------------------------------------------------------
+# Preserve the original invocation: the loop below shifts $@ away, so the
+# "run with sudo" hint (require_root) would otherwise lose the user's flags.
+ORIGINAL_ARGS=("$@")
 while [[ $# -gt 0 ]]; do
     case "$1" in
         --nvidia)      FORCE_NVIDIA="yes"; shift ;;
@@ -720,7 +722,7 @@ done
 # ---------------------------------------------------------------------------
 # Main
 # ---------------------------------------------------------------------------
-require_root "$@"
+require_root "${ORIGINAL_ARGS[@]}"
 require_fedora
 touch "$LOG_FILE"
 

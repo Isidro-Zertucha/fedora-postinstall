@@ -20,7 +20,8 @@
 #   asus        asusctl + supergfxctl (ASUS laptops, asus-linux.org COPR)
 #   distrobox   containerized dev environments (Podman-backed)
 #   wine        Wine + winetricks (non-Steam Windows software)
-#   lutris      Lutris game launcher (Epic/GOG/emulators)
+#   lutris      Lutris game launcher (Epic/GOG/emulators/install scripts)
+#   faugus      Faugus Launcher — minimal UMU/Proton launcher for Windows games
 #   gametweaks  scx_lavd scheduler as a TOGGLE (stock kernel), split_lock_detect=off
 #   creative    GIMP, Inkscape, Kdenlive, Audacity, Blender
 #   apps        Discord (Vesktop), Spotify, Telegram — Flatpaks
@@ -37,6 +38,7 @@
 #
 # Usage:
 #   sudo ./fedora-postinstall.sh                      # all defaults, auto GPU
+#   sudo ./fedora-postinstall.sh --menu               # interactive section picker
 #   sudo ./fedora-postinstall.sh --no-nvidia          # skip NVIDIA even if present
 #   sudo ./fedora-postinstall.sh --with legion,gametweaks
 #   sudo ./fedora-postinstall.sh --parallel 1               # bad network: serial downloads
@@ -54,7 +56,7 @@ set -uo pipefail
 # ---------------------------------------------------------------------------
 LOG_FILE="/var/log/fedora-postinstall.log"
 DEFAULT_SECTIONS=(base codecs nvidia flatpak gaming snapper media dev virt qol)
-OPTIONAL_SECTIONS=(legion asus distrobox wine lutris gametweaks creative apps)
+OPTIONAL_SECTIONS=(legion asus distrobox wine lutris faugus gametweaks creative apps)
 FORCE_NVIDIA=""          # "", "yes", "no"
 ONLY_SECTIONS=""
 SKIP_SECTIONS=""
@@ -62,6 +64,7 @@ WITH_SECTIONS=""
 FAILED_STEPS=()
 NVM_VERSION="v0.40.3"    # bump when nvm releases; check github.com/nvm-sh/nvm
 PARALLEL_DL=""           # "" = auto-detect from network probe; or forced via --parallel N
+MENU_MODE=""             # "yes" = show the interactive section picker before running
 
 RED='\033[0;31m'; GREEN='\033[0;32m'; YELLOW='\033[1;33m'
 BLUE='\033[0;34m'; BOLD='\033[1m'; NC='\033[0m'
@@ -164,6 +167,86 @@ probe_parallel_downloads() {
     else
         echo 10
     fi
+}
+
+# One-line descriptions for the interactive picker (--menu). Keys must match
+# DEFAULT_SECTIONS / OPTIONAL_SECTIONS entries.
+declare -A SECTION_DESC=(
+    [base]="dnf tuning, update, RPM Fusion, firmware, boot tweak"
+    [codecs]="full ffmpeg, GStreamer, hardware video acceleration"
+    [nvidia]="proprietary driver + CUDA/NVENC (auto-skips if no NVIDIA)"
+    [flatpak]="Flathub + Flatseal + Extension Manager"
+    [gaming]="Steam, gamescope, MangoHud, GameMode, ProtonPlus"
+    [snapper]="Btrfs snapshots + Btrfs Assistant GUI"
+    [media]="OBS Studio + virtual camera, mpv, yt-dlp"
+    [dev]="git tooling, Docker CE, nvm, uv, VS Code"
+    [virt]="KVM/QEMU + virt-manager"
+    [qol]="fonts, archives, monitors, GNOME tweaks"
+    [legion]="LenovoLegionLinux fan/power control (community)"
+    [asus]="asusctl + supergfxctl (ASUS laptops)"
+    [distrobox]="containerized dev environments (Podman)"
+    [wine]="Wine + winetricks (non-Steam Windows software)"
+    [lutris]="launcher for Epic/GOG/emulators/install scripts"
+    [faugus]="minimal UMU/Proton launcher for Windows games"
+    [gametweaks]="scx_lavd game-mode toggle, split-lock off"
+    [creative]="GIMP, Inkscape, Kdenlive, Audacity, Blender"
+    [apps]="Discord (Vesktop), Spotify, Telegram (Flatpaks)"
+)
+
+# Interactive section picker. Defaults start checked, optionals unchecked.
+# The result is written into ONLY_SECTIONS so exactly the checked set runs.
+run_menu() {
+    if [[ ! -t 0 ]]; then
+        err "--menu needs an interactive terminal (stdin is not a TTY)"
+        exit 1
+    fi
+
+    local all=("${DEFAULT_SECTIONS[@]}" "${OPTIONAL_SECTIONS[@]}")
+    declare -A checked
+    local s
+    for s in "${DEFAULT_SECTIONS[@]}";  do checked[$s]=1; done
+    for s in "${OPTIONAL_SECTIONS[@]}"; do checked[$s]=0; done
+
+    local reply i tok
+    while true; do
+        clear 2>/dev/null || true
+        echo -e "${BOLD}==> Select sections${NC}  (defaults pre-checked; optionals off)"
+        echo -e "    number = toggle | 'a' all | 'n' none | 'd' defaults | Enter = install | q = quit\n"
+        i=1
+        for s in "${all[@]}"; do
+            local mark=" "
+            [[ ${checked[$s]} -eq 1 ]] && mark="x"
+            printf "  %2d) [%s] %-11s %s\n" "$i" "$mark" "$s" "${SECTION_DESC[$s]:-}"
+            ((i++))
+        done
+        echo
+        read -rp "> " reply || { echo; err "Cancelled."; exit 0; }
+        case "$reply" in
+            "")   break ;;
+            q|Q)  echo "Cancelled."; exit 0 ;;
+            a|A)  for s in "${all[@]}"; do checked[$s]=1; done ;;
+            n|N)  for s in "${all[@]}"; do checked[$s]=0; done ;;
+            d|D)  for s in "${DEFAULT_SECTIONS[@]}";  do checked[$s]=1; done
+                  for s in "${OPTIONAL_SECTIONS[@]}"; do checked[$s]=0; done ;;
+            *)    for tok in $reply; do
+                      if [[ "$tok" =~ ^[0-9]+$ ]] && (( tok >= 1 && tok <= ${#all[@]} )); then
+                          s="${all[$((tok-1))]}"
+                          checked[$s]=$(( 1 - checked[$s] ))
+                      else
+                          warn "Ignored: '$tok'"
+                      fi
+                  done ;;
+        esac
+    done
+
+    local sel=()
+    for s in "${all[@]}"; do [[ ${checked[$s]} -eq 1 ]] && sel+=("$s"); done
+    if [[ ${#sel[@]} -eq 0 ]]; then
+        err "Nothing selected — aborting."
+        exit 0
+    fi
+    ONLY_SECTIONS=$(IFS=,; echo "${sel[*]}")
+    log "Selected: $ONLY_SECTIONS"
 }
 
 # ---------------------------------------------------------------------------
@@ -668,6 +751,20 @@ section_lutris() {
     step "Install Lutris" dnf -y install lutris
 }
 
+section_faugus() {
+    header "FAUGUS — minimal UMU/Proton launcher for Windows games"
+
+    # Deliberately the COPR (native) build, NOT the Flatpak: the Flatpak has
+    # known breakage (gamescope doesn't work, the 'stop' button won't close
+    # games, themes). The native build integrates with the gamescope/MangoHud/
+    # GameMode stack installed by the 'gaming' section.
+    step "Enable Faugus COPR" dnf copr enable -y faugus/faugus-launcher
+    step "Install Faugus Launcher" dnf -y install faugus-launcher
+
+    ok "Built-in Proton manager (GE-Proton / Proton-EM). Overlaps Lutris —"
+    ok "Faugus is the simple 'point at an .exe' option; Lutris is the full platform."
+}
+
 section_creative() {
     header "CREATIVE — image/video/audio/3D suite"
 
@@ -694,6 +791,7 @@ section_apps() {
 ORIGINAL_ARGS=("$@")
 while [[ $# -gt 0 ]]; do
     case "$1" in
+        --menu)        MENU_MODE="yes"; shift ;;
         --nvidia)      FORCE_NVIDIA="yes"; shift ;;
         --no-nvidia)   FORCE_NVIDIA="no"; shift ;;
         --only)        ONLY_SECTIONS="$2"; shift 2 ;;
@@ -728,6 +826,9 @@ touch "$LOG_FILE"
 
 header "Fedora post-install (v3) — log: $LOG_FILE"
 log "User: $REAL_USER | GPU(s): $(lspci -nn | grep -Ei 'vga|3d' | sed 's/^[0-9a-f:.]* //' | paste -sd ' | ')"
+
+# Interactive picker overrides section selection with exactly the checked set.
+[[ "$MENU_MODE" == "yes" ]] && run_menu
 
 for s in "${DEFAULT_SECTIONS[@]}" "${OPTIONAL_SECTIONS[@]}"; do
     if section_enabled "$s"; then

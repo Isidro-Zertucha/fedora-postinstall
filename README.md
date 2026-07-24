@@ -49,6 +49,12 @@ chmod +x fedora-postinstall.sh
 sudo ./fedora-postinstall.sh --with gametweaks
 ```
 
+Prefer to pick sections interactively instead of memorizing flags? Run the local file with `--menu`:
+
+```bash
+sudo ./fedora-postinstall.sh --menu
+```
+
 ---
 
 ## What it installs
@@ -57,7 +63,7 @@ sudo ./fedora-postinstall.sh --with gametweaks
 
 | Section   | What it does |
 |-----------|--------------|
-| `base`    | dnf tuning (parallel downloads, `defaultyes`), full update, RPM Fusion (free + nonfree + tainted), firmware updates via LVFS, faster boot, an `update-all` helper |
+| `base`    | dnf tuning (auto-probed parallel downloads), full update, RPM Fusion (free + nonfree + tainted), firmware updates via LVFS, faster boot, an `update-all` helper |
 | `codecs`  | Full `ffmpeg`, GStreamer plugins, and per-GPU hardware video acceleration (AMD / Intel / NVIDIA) |
 | `nvidia`  | Proprietary driver (akmod) + CUDA/NVENC, **open kernel modules** (needed for RTX 50-series), and **Secure Boot module signing** (MOK enrollment) — *auto-detected* |
 | `flatpak` | Flathub (unfiltered) + Flatseal, plus Extension Manager on GNOME |
@@ -76,7 +82,8 @@ sudo ./fedora-postinstall.sh --with gametweaks
 | `asus`       | asusctl + supergfxctl (ASUS laptops, asus-linux.org COPR) |
 | `distrobox`  | Containerized dev environments (Podman-backed) |
 | `wine`       | Wine + winetricks for non-Steam Windows software |
-| `lutris`     | Lutris launcher (Epic / GOG / emulators) |
+| `lutris`     | Lutris launcher (Epic / GOG / emulators / community install scripts) |
+| `faugus`     | Faugus Launcher — minimal UMU/Proton launcher for individual Windows games (native COPR build; built-in GE-Proton manager). Overlaps `lutris`: pick the simple per-`.exe` tool (`faugus`) or the full platform (`lutris`) |
 | `gametweaks` | `scx_lavd` scheduler as a **toggle** (stock kernel) + `split_lock_detect=off` |
 | `creative`   | GIMP, Inkscape, Kdenlive, Audacity, Blender |
 | `apps`       | Discord (Vesktop), Spotify, Telegram — Flatpaks |
@@ -86,6 +93,7 @@ sudo ./fedora-postinstall.sh --with gametweaks
 ## Flags
 
 ```
+--menu                 Interactive picker: check/uncheck sections before running
 --nvidia               Force NVIDIA setup even if no card is detected
 --no-nvidia            Skip NVIDIA even if a card is present
 --only  a,b,c          Run ONLY these sections
@@ -95,6 +103,11 @@ sudo ./fedora-postinstall.sh --with gametweaks
 --list                 List available sections and exit
 -h, --help             Show usage
 ```
+
+`--menu` opens a terminal checklist (defaults pre-checked, optionals off): type a number
+to toggle a section, `a`/`n` for all/none, `d` to reset to defaults, Enter to install, `q` to
+quit. It writes the checked set to `--only`, so it needs a real TTY (run the local file, not the
+`curl | bash` one-liner).
 
 Everything is **idempotent** — re-running only does what's still missing, and a failed step (one bad
 repo, one missing package) is logged and skipped instead of aborting the whole run. Full log at

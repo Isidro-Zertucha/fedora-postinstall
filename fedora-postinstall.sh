@@ -13,7 +13,7 @@
 #   media    OBS Studio + virtual camera (v4l2loopback), mpv, yt-dlp
 #   dev      git/tooling, Docker CE, nvm (Node), uv (Python), VS Code
 #   virt     KVM/QEMU + virt-manager
-#   qol      archives, fonts, monitors, tldr, GNOME tweaks
+#   qol      archives, fonts (incl. MS core fonts), monitors, tldr, GNOME tweaks
 #
 # Optional sections (only with --with):
 #   legion      LenovoLegionLinux (fan curves / power modes, community module)
@@ -585,6 +585,20 @@ section_qol() {
     step_soft "Fonts" dnf -y install \
         google-noto-emoji-fonts google-noto-sans-fonts jetbrains-mono-fonts \
         fira-code-fonts
+
+    # Microsoft TrueType core fonts (Arial, Times New Roman, Verdana, Courier
+    # New, Georgia, Impact, Comic Sans...). Fedora can't ship these directly,
+    # but Microsoft's EULA permits redistribution via the installer RPM, which
+    # downloads the .cab files from SourceForge and extracts them with cabextract.
+    # step_soft: SourceForge fetches are flaky and this is non-essential polish.
+    if ! rpm -q msttcore-fonts-installer >/dev/null 2>&1; then
+        step "Font install prerequisites (cabextract)" dnf -y install \
+            curl cabextract xorg-x11-font-utils fontconfig
+        step_soft "Microsoft core fonts (msttcore)" rpm -i \
+            https://downloads.sourceforge.net/project/mscorefonts2/rpms/msttcore-fonts-installer-2.6-1.noarch.rpm
+    else
+        ok "Microsoft core fonts already installed"
+    fi
 }
 
 # ---------------------------------------------------------------------------

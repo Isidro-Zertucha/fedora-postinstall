@@ -16,14 +16,14 @@
 #   qol      archives, fonts (incl. MS core fonts), monitors, tldr, GNOME tweaks
 #
 # Optional sections (only with --with):
-#   legion      LenovoLegionLinux (fan curves / power modes, community module)
+#   legion      Lenovo Legion power modes (verifies native kernel support first)
 #   asus        asusctl + supergfxctl (ASUS laptops, asus-linux.org COPR)
 #   distrobox   containerized dev environments (Podman-backed)
 #   wine        Wine + winetricks (non-Steam Windows software)
 #   lutris      Lutris game launcher (Epic/GOG/emulators/install scripts)
 #   faugus      Faugus Launcher — minimal UMU/Proton launcher for Windows games
 #   gametweaks  scx_lavd scheduler as a TOGGLE (stock kernel), split_lock_detect=off
-#   creative    GIMP, Inkscape, Kdenlive, Audacity, Blender
+#   creative    GIMP, Inkscape, Kdenlive, Audacity, Blender — Flatpaks
 #   apps        Discord (Vesktop), Spotify, Telegram — Flatpaks
 #
 # Runtime toggles (after gametweaks is installed):
@@ -147,6 +147,44 @@ set_dnf_opt() {
     fi
 }
 
+# Enable a COPR only if it actually serves the packages we want on THIS Fedora
+# release. When Fedora branches, COPR auto-forks a project's existing binaries
+# into the new chroot, so a repo can look alive while shipping packages nobody
+# has rebuilt in a year. Worse, an enabled COPR with nothing installable is pure
+# liability: it contributes zero packages and still blocks `dnf system-upgrade`
+# once it lags a release behind.
+#
+# Querying the repo by id also catches package-name typos and case mismatches —
+# COPR package names are case-sensitive, and asking for the wrong case looks
+# exactly like an empty repository.
+#
+# On success the repo stays enabled with skip_if_unavailable, so a future
+# missing chroot degrades to a warning instead of wedging every dnf run. On
+# failure the repo is disabled again, leaving the system as we found it.
+copr_enable_guarded() {
+    local copr="$1"; shift
+    local repo="copr:copr.fedorainfracloud.org:${copr%%/*}:${copr##*/}"
+    local pkg
+
+    if ! dnf copr enable -y "$copr" >>"$LOG_FILE" 2>&1; then
+        warn "COPR could not be enabled: $copr"
+        return 1
+    fi
+
+    for pkg in "$@"; do
+        if [[ -z "$(dnf -q repoquery --repo="$repo" "$pkg" 2>/dev/null)" ]]; then
+            warn "COPR $copr serves no '$pkg' for Fedora $FEDORA_VER — disabling it again"
+            dnf copr disable -y "$copr" >>"$LOG_FILE" 2>&1 || true
+            return 1
+        fi
+    done
+
+    dnf config-manager setopt "${repo}.skip_if_unavailable=1" >>"$LOG_FILE" 2>&1 ||
+        dnf config-manager --save "--setopt=${repo}.skip_if_unavailable=1" >>"$LOG_FILE" 2>&1 || true
+    ok "COPR verified for Fedora $FEDORA_VER: $copr"
+    return 0
+}
+
 # Probe network quality and pick a parallel-download count.
 # Uses a small fetch from Fedora's mirror service; TCP slow-start means small
 # files UNDER-estimate bandwidth, which errs toward fewer streams — the safe
@@ -182,14 +220,14 @@ declare -A SECTION_DESC=(
     [dev]="git tooling, Docker CE, nvm, uv, VS Code"
     [virt]="KVM/QEMU + virt-manager"
     [qol]="fonts, archives, monitors, GNOME tweaks"
-    [legion]="LenovoLegionLinux fan/power control (community)"
+    [legion]="Lenovo Legion power modes (native kernel check)"
     [asus]="asusctl + supergfxctl (ASUS laptops)"
     [distrobox]="containerized dev environments (Podman)"
     [wine]="Wine + winetricks (non-Steam Windows software)"
     [lutris]="launcher for Epic/GOG/emulators/install scripts"
     [faugus]="minimal UMU/Proton launcher for Windows games"
     [gametweaks]="scx_lavd game-mode toggle, split-lock off"
-    [creative]="GIMP, Inkscape, Kdenlive, Audacity, Blender"
+    [creative]="GIMP, Inkscape, Kdenlive, Audacity, Blender (Flathub)"
     [apps]="Discord (Vesktop), Spotify, Telegram (Flatpaks)"
 )
 
@@ -477,6 +515,11 @@ section_snapper() {
 section_media() {
     header "MEDIA — OBS Studio + virtual camera, mpv, yt-dlp"
 
+    # OBS stays NATIVE on purpose, even though upstream also ships a Flatpak.
+    # The virtual camera below is a host kernel module, and third-party OBS
+    # plugins expect the system plugin path — inside the sandbox both turn into
+    # extension plumbing. This is the one place where "newer upstream build"
+    # loses to integration; the creative section goes the other way.
     step "OBS Studio" dnf -y install obs-studio
 
     # Virtual camera for OBS (RPM Fusion akmod — auto-rebuilds per kernel)
@@ -563,6 +606,86 @@ section_virt() {
     fi
 }
 
+# Microsoft TrueType core fonts: Arial, Times New Roman, Courier New, Verdana,
+# Georgia, Impact, Comic Sans, Trebuchet, Andale Mono, Webdings.
+#
+# Deliberately NOT the msttcore-fonts-installer RPM. That package is unsigned,
+# was built in 2013 with SHA-1 digests, and current rpm rejects it outright on
+# Fedora 43+ ("fails verification: no digest"). The --nodigest workaround that
+# circulates in forums just disables the last integrity check standing, and its
+# %post scriptlet fetches archives from the network as root.
+#
+# This does what Debian's ttf-mscorefonts-installer does instead: download
+# Microsoft's original self-extracting cabinets, verify each against known-good
+# SHA-256 sums, then extract locally. Nothing runs as root from the network and
+# nothing is redistributed — the EULA covers downloading and extracting here.
+#
+# Sums are Debian's cabfiles.sha256sums (msttcorefonts 3.8.1), cross-checked
+# against cabinets downloaded fresh from the mirror below. These files have not
+# changed since 2001; a mismatch means the download is wrong, not stale.
+install_msttcore_fonts() {
+    local dest="/usr/share/fonts/msttcore"
+
+    if compgen -G "$dest/*.ttf" >/dev/null 2>&1; then
+        ok "Microsoft core fonts already installed"
+        return 0
+    fi
+
+    declare -A sums=(
+        [andale32.exe]="0524fe42951adc3a7eb870e32f0920313c71f170c859b5f770d82b4ee111e970"
+        [arial32.exe]="85297a4d146e9c87ac6f74822734bdee5f4b2a722d7eaa584b7f2cbf76f478f6"
+        [arialb32.exe]="a425f0ffb6a1a5ede5b979ed6177f4f4f4fdef6ae7c302a7b7720ef332fec0a8"
+        [comic32.exe]="9c6df3feefde26d4e41d4a4fe5db2a89f9123a772594d7f59afd062625cd204e"
+        [courie32.exe]="bb511d861655dde879ae552eb86b134d6fae67cb58502e6ff73ec5d9151f3384"
+        [georgi32.exe]="2c2c7dcda6606ea5cf08918fb7cd3f3359e9e84338dc690013f20cd42e930301"
+        [impact32.exe]="6061ef3b7401d9642f5dfdb5f2b376aa14663f6275e60a51207ad4facf2fccfb"
+        [times32.exe]="db56595ec6ef5d3de5c24994f001f03b2a13e37cee27bc25c58f6f43e8f807ab"
+        [trebuc32.exe]="5a690d9bb8510be1b8b4fe49f1f2319651fe51bbe54775ddddd8ef0bd07fdac9"
+        [verdan32.exe]="c1cb61255e363166794e47664e2f21af8e3a26cb6346eb8d2ae2fa85dd5aad96"
+        [webdin32.exe]="64595b5abc1080fba8610c5c34fab5863408e806aafe84653ca8575bed17d75a"
+    )
+
+    local mirror="https://downloads.sourceforge.net/corefonts"
+    local tmp; tmp=$(mktemp -d) || return 1
+    local verified=0 cab sum
+
+    for cab in "${!sums[@]}"; do
+        if ! curl -fsSL --retry 3 --max-time 120 -o "$tmp/$cab" "$mirror/$cab"; then
+            warn "msttcore: download failed for $cab"
+            continue
+        fi
+        sum=$(sha256sum "$tmp/$cab" | cut -d' ' -f1)
+        if [[ "$sum" != "${sums[$cab]}" ]]; then
+            warn "msttcore: SHA-256 mismatch for $cab ($sum) — discarded"
+            rm -f "$tmp/$cab"
+            continue
+        fi
+        if cabextract -L -q -d "$tmp/ttf" "$tmp/$cab" >/dev/null 2>&1; then
+            verified=$((verified + 1))
+        else
+            warn "msttcore: extraction failed for $cab"
+        fi
+    done
+
+    if [[ $verified -eq 0 ]]; then
+        rm -rf "$tmp"
+        return 1
+    fi
+
+    mkdir -p "$dest"
+    find "$tmp/ttf" -iname '*.ttf' -exec install -m 0644 -t "$dest" {} +
+    rm -rf "$tmp"
+
+    if ! compgen -G "$dest/*.ttf" >/dev/null 2>&1; then
+        warn "msttcore: cabinets verified but no .ttf extracted"
+        return 1
+    fi
+
+    fc-cache -f "$dest" >/dev/null 2>&1
+    log "msttcore: $verified/${#sums[@]} cabinets verified, $(find "$dest" -iname '*.ttf' | wc -l) fonts in $dest"
+    return 0
+}
+
 section_qol() {
     header "QOL — fonts, archives, utilities"
 
@@ -586,19 +709,22 @@ section_qol() {
         google-noto-emoji-fonts google-noto-sans-fonts jetbrains-mono-fonts \
         fira-code-fonts
 
-    # Microsoft TrueType core fonts (Arial, Times New Roman, Verdana, Courier
-    # New, Georgia, Impact, Comic Sans...). Fedora can't ship these directly,
-    # but Microsoft's EULA permits redistribution via the installer RPM, which
-    # downloads the .cab files from SourceForge and extracts them with cabextract.
+    # Metric-compatible substitutes, from Fedora's own signed repos: Liberation
+    # covers Arial/Times New Roman/Courier New, Carlito covers Calibri, Caladea
+    # covers Cambria. They keep line breaks and page counts close when a document
+    # asks for a font that is not installed.
+    #
+    # Treat this as a floor, not a fix. LibreOffice has its own substitution
+    # table and leans on these heavily; OnlyOffice targets OOXML fidelity and
+    # matches on real font metrics instead, so it benefits far more from the
+    # genuine cabinets fetched below than from these stand-ins.
+    step_soft "Metric-compatible MS font substitutes" dnf -y install \
+        liberation-fonts google-carlito-fonts google-crosextra-caladea-fonts
+
+    # The genuine Microsoft fonts — downloaded and SHA-256 verified, no RPM.
     # step_soft: SourceForge fetches are flaky and this is non-essential polish.
-    if ! rpm -q msttcore-fonts-installer >/dev/null 2>&1; then
-        step "Font install prerequisites (cabextract)" dnf -y install \
-            curl cabextract xorg-x11-font-utils fontconfig
-        step_soft "Microsoft core fonts (msttcore)" rpm -i \
-            https://downloads.sourceforge.net/project/mscorefonts2/rpms/msttcore-fonts-installer-2.6-1.noarch.rpm
-    else
-        ok "Microsoft core fonts already installed"
-    fi
+    step "Font extraction tooling" dnf -y install curl cabextract fontconfig
+    step_soft "Microsoft core fonts (verified download)" install_msttcore_fonts
 }
 
 # ---------------------------------------------------------------------------
@@ -606,46 +732,53 @@ section_qol() {
 # ---------------------------------------------------------------------------
 
 section_legion() {
-    header "LEGION — LenovoLegionLinux (community fan/power control)"
-    warn "Community kernel module — not official Lenovo software."
+    header "LEGION — Lenovo Legion power/fan control"
 
-    step "Build prerequisites" dnf -y install \
-        dkms "kernel-devel-$(uname -r)" openssl lm_sensors
-
-    # Official COPR per the LLL project README: mrduarte/LenovoLegionLinux
-    # CAVEAT (verified Jul 2026): its latest build FAILED over a year ago, so
-    # packages for current Fedora releases may not exist — source install
-    # via the upstream repo is the realistic fallback.
-    local installed="no"
-    if dnf copr enable -y "mrduarte/LenovoLegionLinux" >>"$LOG_FILE" 2>&1; then
-        # Fedora package names differ from the Ubuntu PPA ones:
-        if dnf -y install dkms-lenovolegionlinux python-lenovolegionlinux >>"$LOG_FILE" 2>&1; then
-            installed="yes"; ok "Installed from COPR: mrduarte/LenovoLegionLinux"
-        else
-            dnf copr disable -y "mrduarte/LenovoLegionLinux" >>"$LOG_FILE" 2>&1 || true
+    # The mainline kernel now carries the whole Lenovo WMI stack under
+    # drivers/platform/x86/lenovo/: wmi-gamezone.c (LENOVO_WMI_GAMEZONE) and
+    # wmi-other.c (LENOVO_WMI_TUNING), both wired into ACPI_PLATFORM_PROFILE.
+    # On a current Fedora kernel the power modes are already there natively.
+    #
+    # So we deliberately do NOT enable mrduarte/LenovoLegionLinux. Its last real
+    # build was April 2025; the F43/F44 chroots are COPR auto-forks of that same
+    # build rather than rebuilds. Shipping a 2025 DKMS module against a 2026
+    # kernel means a rebuild that can fail on every kernel update, plus MOK
+    # signing under Secure Boot — all to duplicate what the kernel does already.
+    if [[ -e /sys/firmware/acpi/platform_profile ]]; then
+        ok "Native power modes present — no third-party module needed"
+        log "  current:   $(< /sys/firmware/acpi/platform_profile)"
+        if [[ -e /sys/firmware/acpi/platform_profile_choices ]]; then
+            log "  available: $(< /sys/firmware/acpi/platform_profile_choices)"
         fi
+        ok "Switch with Fn+Q, the GNOME/KDE power panel, or: powerprofilesctl set <mode>"
+        ok "Fan RPM readout:  dnf install lm_sensors && sensors-detect"
+        return
     fi
 
-    if [[ "$installed" == "no" ]]; then
-        warn "COPR has no packages for this Fedora release (its builds are stale)."
-        warn "Install from source instead:"
-        warn "  git clone https://github.com/johnfanv2/LenovoLegionLinux"
-        warn "  cd LenovoLegionLinux/kernel_module && make && sudo make dkms"
-        warn "Also note: LLL's confirmed models are ~2020–2023. On 2025+ Legions,"
-        warn "check first whether your kernel already exposes power modes natively"
-        warn "(lenovo-wmi drivers / platform_profile) before adding this module."
-        FAILED_STEPS+=("LenovoLegionLinux — manual install needed (stale COPR)")
-    fi
-
+    # Only worth the community module if the kernel genuinely does not cover it.
+    warn "No /sys/firmware/acpi/platform_profile — the kernel does not drive this model."
+    warn "Only in that case is the community module worth the maintenance cost:"
+    warn "  dnf install dkms kernel-devel-\$(uname -r) openssl lm_sensors"
+    warn "  git clone https://github.com/johnfanv2/LenovoLegionLinux"
+    warn "  cd LenovoLegionLinux/kernel_module && make && sudo make dkms"
+    warn "Confirmed models are roughly 2020–2023; newer Legions rely on the WMI drivers."
     if mokutil --sb-state 2>/dev/null | grep -qi "enabled"; then
-        warn "Secure Boot is ON: the DKMS module must be signed with your MOK key"
+        warn "Secure Boot is ON: that DKMS module must be signed with your MOK key"
     fi
+    FAILED_STEPS+=("Legion power modes — no native platform_profile, manual build needed")
 }
 
 section_asus() {
     header "ASUS — asusctl + supergfxctl (asus-linux.org)"
 
-    step "Enable asus-linux COPR" dnf copr enable -y lukenukem/asus-linux
+    # Actively built (last rebuild Jun 2026) and the COPR asus-linux.org itself
+    # points at — there is no in-repo alternative for asusctl/supergfxctl.
+    if ! copr_enable_guarded lukenukem/asus-linux asusctl supergfxctl; then
+        err "asus-linux COPR unusable on Fedora $FEDORA_VER — section skipped"
+        FAILED_STEPS+=("asusctl/supergfxctl — COPR has no packages for F$FEDORA_VER")
+        return
+    fi
+
     step "Install asusctl + supergfxctl" dnf -y install asusctl supergfxctl
     step "Enable services" bash -c \
         'systemctl enable --now asusd 2>/dev/null; systemctl enable --now supergfxd 2>/dev/null || true'
@@ -772,7 +905,13 @@ section_faugus() {
     # known breakage (gamescope doesn't work, the 'stop' button won't close
     # games, themes). The native build integrates with the gamescope/MangoHud/
     # GameMode stack installed by the 'gaming' section.
-    step "Enable Faugus COPR" dnf copr enable -y faugus/faugus-launcher
+    # The upstream author's own COPR, rebuilt within days (last Jul 2026).
+    if ! copr_enable_guarded faugus/faugus-launcher faugus-launcher; then
+        err "Faugus COPR unusable on Fedora $FEDORA_VER — section skipped"
+        FAILED_STEPS+=("faugus-launcher — COPR has no packages for F$FEDORA_VER")
+        return
+    fi
+
     step "Install Faugus Launcher" dnf -y install faugus-launcher
 
     ok "Built-in Proton manager (GE-Proton / Proton-EM). Overlaps Lutris —"
@@ -780,10 +919,30 @@ section_faugus() {
 }
 
 section_creative() {
-    header "CREATIVE — image/video/audio/3D suite"
+    header "CREATIVE — image/video/audio/3D suite (Flathub)"
 
-    step "Install creative apps" dnf -y install \
-        gimp inkscape kdenlive audacity blender
+    # Flatpak wins outright here, so Flatpak it is. All five are published on
+    # Flathub by their own upstreams and track releases immediately, while
+    # Fedora's builds trail — Blender and Kdenlive worst of all. And none of
+    # them needs host integration: they are self-contained desktop apps, so the
+    # argument that keeps Steam/OBS native (talking to the gaming stack, kernel
+    # modules, daemons) simply does not apply.
+    #
+    # This section is optional and can run alone (--only creative), so ensure
+    # Flathub exists instead of assuming the 'flatpak' section ran first.
+    step "Ensure Flathub remote" flatpak remote-add --if-not-exists \
+        flathub https://dl.flathub.org/repo/flathub.flatpakrepo
+
+    step "GIMP" \
+        flatpak install -y --noninteractive flathub org.gimp.GIMP
+    step "Inkscape" \
+        flatpak install -y --noninteractive flathub org.inkscape.Inkscape
+    step "Kdenlive" \
+        flatpak install -y --noninteractive flathub org.kde.kdenlive
+    step "Audacity" \
+        flatpak install -y --noninteractive flathub org.audacityteam.Audacity
+    step "Blender" \
+        flatpak install -y --noninteractive flathub org.blender.Blender
 }
 
 section_apps() {
@@ -869,4 +1028,20 @@ if has_nvidia_gpu && [[ "$FORCE_NVIDIA" != "no" ]]; then
     warn "  1. modinfo -F version nvidia   → must print a version"
     warn "  2. If Secure Boot: expect the MOK Manager screen on reboot"
 fi
+# Third-party repos are the usual reason `dnf system-upgrade` fails: a COPR or
+# vendor repo with no chroot for the new release stops the transaction dead. The
+# COPRs we enable get skip_if_unavailable, but vendor repos (Docker, VS Code,
+# RPM Fusion) do not — so list everything non-Fedora while the user is looking.
+header "THIRD-PARTY REPOSITORIES"
+mapfile -t EXTRA_REPOS < <(dnf repolist --enabled 2>/dev/null |
+    awk 'NR>1 && $1 !~ /^(fedora|updates|repo|Last)/ {print $1}')
+if [[ ${#EXTRA_REPOS[@]} -gt 0 ]]; then
+    warn "These are not Fedora repos. Before a 'dnf system-upgrade', disable any"
+    warn "that has not published packages for the new release:"
+    for r in "${EXTRA_REPOS[@]}"; do warn "  - $r"; done
+    warn "Disable one:  dnf config-manager setopt <repo-id>.enabled=0"
+else
+    ok "No third-party repositories enabled"
+fi
+
 warn "Reboot recommended:  systemctl reboot"

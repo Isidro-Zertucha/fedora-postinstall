@@ -13,7 +13,7 @@
 #   media    OBS Studio + virtual camera (v4l2loopback), mpv, yt-dlp
 #   dev      git/tooling, Docker CE, nvm (Node), uv (Python), VS Code
 #   virt     KVM/QEMU + virt-manager
-#   qol      archives, fonts (incl. MS core fonts), monitors, tldr, GNOME tweaks
+#   qol      archives, fonts (incl. MS core fonts), monitors, tldr, desktop extras
 #
 # Optional sections (only with --with):
 #   legion      Lenovo Legion power modes (verifies native kernel support first)
@@ -33,8 +33,12 @@
 #   boot-on/off = persist across reboots
 #   AUTO: games launched with 'gamemoderun %command%' flip scx_lavd on/off themselves.
 #
-# Desktop-aware: GNOME and KDE Plasma both supported — GNOME gets Extension
-# Manager/Tweaks/file-roller, KDE gets ark/filelight; shared bits unchanged.
+# Desktop-aware: GNOME, KDE Plasma and COSMIC — GNOME gets Extension
+# Manager/Tweaks/file-roller, KDE gets ark/filelight, COSMIC gets
+# file-roller/baobab (cosmic-settings covers the rest); shared bits unchanged.
+#
+# Package-based Fedora only: image-based variants (Silverblue, Kinoite, COSMIC
+# Atomic, Bazzite) are refused up front — they layer with rpm-ostree, not dnf.
 #
 # Usage:
 #   sudo ./fedora-postinstall.sh                      # all defaults, auto GPU
@@ -55,6 +59,7 @@ set -uo pipefail
 # Globals & helpers
 # ---------------------------------------------------------------------------
 LOG_FILE="/var/log/fedora-postinstall.log"
+REPO_RAW="https://raw.githubusercontent.com/Isidro-Zertucha/fedora-postinstall/main/fedora-postinstall.sh"
 DEFAULT_SECTIONS=(base codecs nvidia flatpak gaming snapper media dev virt qol)
 OPTIONAL_SECTIONS=(legion asus distrobox wine lutris faugus gametweaks creative apps)
 FORCE_NVIDIA=""          # "", "yes", "no"
@@ -69,11 +74,15 @@ MENU_MODE=""             # "yes" = show the interactive section picker before ru
 RED='\033[0;31m'; GREEN='\033[0;32m'; YELLOW='\033[1;33m'
 BLUE='\033[0;34m'; BOLD='\033[1m'; NC='\033[0m'
 
-log()    { echo -e "${BLUE}[*]${NC} $*" | tee -a "$LOG_FILE"; }
-ok()     { echo -e "${GREEN}[✓]${NC} $*" | tee -a "$LOG_FILE"; }
-warn()   { echo -e "${YELLOW}[!]${NC} $*" | tee -a "$LOG_FILE"; }
-err()    { echo -e "${RED}[✗]${NC} $*" | tee -a "$LOG_FILE"; }
-header() { echo -e "\n${BOLD}==> $*${NC}\n" | tee -a "$LOG_FILE"; }
+# tee's stderr is dropped on purpose: argument errors and the "run with sudo"
+# hint are printed before the log file exists, and a permission-denied warning
+# on every line is not what someone who just forgot sudo needs to read. Once
+# main() touches the log as root the file is writable, so nothing is lost.
+log()    { echo -e "${BLUE}[*]${NC} $*" | tee -a "$LOG_FILE" 2>/dev/null; }
+ok()     { echo -e "${GREEN}[✓]${NC} $*" | tee -a "$LOG_FILE" 2>/dev/null; }
+warn()   { echo -e "${YELLOW}[!]${NC} $*" | tee -a "$LOG_FILE" 2>/dev/null; }
+err()    { echo -e "${RED}[✗]${NC} $*" | tee -a "$LOG_FILE" 2>/dev/null; }
+header() { echo -e "\n${BOLD}==> $*${NC}\n" | tee -a "$LOG_FILE" 2>/dev/null; }
 
 # Run a step; record failure but keep going (one bad repo shouldn't kill the run)
 step() {
@@ -95,11 +104,18 @@ step_soft() {
     if "$@" >>"$LOG_FILE" 2>&1; then ok "$desc"; else warn "skipped (optional): $desc"; fi
 }
 
+# $0 is a usable path only when the script sits on disk. Run the documented
+# bash -c "$(curl …)" form and $0 is the '--' placeholder instead, so the hint
+# has to name the remote invocation rather than print "sudo --".
 require_root() {
-    if [[ $EUID -ne 0 ]]; then
+    [[ $EUID -eq 0 ]] && return
+    if [[ -f "$0" ]]; then
         err "Run with sudo: sudo $0 $*"
-        exit 1
+    else
+        err "Run with sudo — prefix the whole command:"
+        err "  sudo bash -c \"\$(curl -fsSL $REPO_RAW)\" -- $*"
     fi
+    exit 1
 }
 
 require_fedora() {
@@ -109,6 +125,20 @@ require_fedora() {
     fi
     FEDORA_VER=$(rpm -E %fedora)
     log "Detected Fedora $FEDORA_VER"
+}
+
+# Image-based Fedora (Silverblue, Kinoite, COSMIC Atomic, Bazzite) boots an
+# ostree deployment: /usr is read-only and packages are layered with rpm-ostree.
+# /etc/os-release still says "fedora", so require_fedora waves it through — and
+# then every dnf transaction fails while the steps that write /etc, sudoers and
+# kernel args still land, leaving the deployment half-configured. Refuse early.
+require_mutable_system() {
+    if [[ -f /run/ostree-booted ]]; then
+        err "Image-based Fedora detected (ostree deployment)."
+        err "This script installs with dnf and assumes a writable /usr."
+        err "Layer packages with 'rpm-ostree install', or use Flatpak/Distrobox."
+        exit 1
+    fi
 }
 
 # The real (non-root) user, for flatpak/nvm/user-level operations
@@ -122,6 +152,32 @@ has_amd_gpu()    { lspci -nn | grep -Ei 'vga|3d' | grep -qEi 'amd|radeon'; }
 has_intel_gpu()  { lspci -nn | grep -Ei 'vga|3d' | grep -qi intel; }
 has_gnome()      { rpm -q gnome-shell >/dev/null 2>&1; }
 has_kde()        { rpm -q plasma-desktop >/dev/null 2>&1 || rpm -q plasma-workspace >/dev/null 2>&1; }
+has_cosmic()     { rpm -q cosmic-session >/dev/null 2>&1 || rpm -q cosmic-comp >/dev/null 2>&1; }
+
+# A typo in --only/--skip/--with matches no section at all, and the run then
+# reports "All steps completed successfully" having installed precisely nothing.
+# Silence is the wrong answer to a misspelled flag.
+validate_sections() {
+    local flag="$1" list="$2" name s known
+    local -a names bad=()
+    [[ -z "$list" ]] && return 0
+
+    IFS=',' read -ra names <<< "$list"
+    for name in "${names[@]}"; do
+        [[ -z "$name" ]] && continue
+        known=0
+        for s in "${DEFAULT_SECTIONS[@]}" "${OPTIONAL_SECTIONS[@]}"; do
+            [[ "$name" == "$s" ]] && { known=1; break; }
+        done
+        [[ $known -eq 0 ]] && bad+=("$name")
+    done
+
+    if [[ ${#bad[@]} -gt 0 ]]; then
+        err "$flag: unknown section(s): ${bad[*]}"
+        err "Valid sections: ${DEFAULT_SECTIONS[*]} ${OPTIONAL_SECTIONS[*]}"
+        exit 1
+    fi
+}
 
 section_enabled() {
     local s="$1"
@@ -185,6 +241,15 @@ copr_enable_guarded() {
     return 0
 }
 
+# Every Flatpak-installing section can be run on its own (--only apps, --only
+# creative), so none of them may assume the 'flatpak' section went first. Both
+# halves are idempotent and cost nothing when they are already satisfied.
+ensure_flatpak() {
+    command -v flatpak >/dev/null 2>&1 || dnf -y install flatpak || return 1
+    flatpak remote-add --if-not-exists flathub \
+        https://dl.flathub.org/repo/flathub.flatpakrepo
+}
+
 # Probe network quality and pick a parallel-download count.
 # Uses a small fetch from Fedora's mirror service; TCP slow-start means small
 # files UNDER-estimate bandwidth, which errs toward fewer streams — the safe
@@ -194,7 +259,13 @@ probe_parallel_downloads() {
     speed=$(curl -sL --max-time 8 -o /dev/null -w '%{speed_download}' \
         "https://mirrors.fedoraproject.org/metalink?repo=fedora-${FEDORA_VER}&arch=x86_64" \
         2>/dev/null | cut -d. -f1)
-    speed=${speed:-0}
+
+    # Anything that is not a plain integer becomes 0. curl can return an empty
+    # figure on a failed transfer, or a locale-formatted one with a comma where
+    # the decimal point was expected — and a non-numeric value here would make
+    # the comparisons below fail and write an EMPTY max_parallel_downloads into
+    # dnf.conf. Zero routes to the "assume the worst" branch, which is correct.
+    [[ "$speed" =~ ^[0-9]+$ ]] || speed=0
 
     if [[ "$speed" -eq 0 ]]; then
         echo 1   # probe failed/timed out → assume the worst
@@ -213,13 +284,13 @@ declare -A SECTION_DESC=(
     [base]="dnf tuning, update, RPM Fusion, firmware, boot tweak"
     [codecs]="full ffmpeg, GStreamer, hardware video acceleration"
     [nvidia]="proprietary driver + CUDA/NVENC (auto-skips if no NVIDIA)"
-    [flatpak]="Flathub + Flatseal + Extension Manager"
+    [flatpak]="Flathub + Flatseal (+ Extension Manager on GNOME)"
     [gaming]="Steam, gamescope, MangoHud, GameMode, ProtonPlus"
     [snapper]="Btrfs snapshots + Btrfs Assistant GUI"
     [media]="OBS Studio + virtual camera, mpv, yt-dlp"
     [dev]="git tooling, Docker CE, nvm, uv, VS Code"
     [virt]="KVM/QEMU + virt-manager"
-    [qol]="fonts, archives, monitors, GNOME tweaks"
+    [qol]="fonts, archives, monitors, desktop-matched extras"
     [legion]="Lenovo Legion power modes (native kernel check)"
     [asus]="asusctl + supergfxctl (ASUS laptops)"
     [distrobox]="containerized dev environments (Podman)"
@@ -230,6 +301,50 @@ declare -A SECTION_DESC=(
     [creative]="GIMP, Inkscape, Kdenlive, Audacity, Blender (Flathub)"
     [apps]="Discord (Vesktop), Spotify, Telegram (Flatpaks)"
 )
+
+# Help text. Deliberately NOT parsed out of the file's own header: run remotely
+# as bash -c "$(curl …)" and $0 is the '--' placeholder, not a path — the old
+# self-parse read stdin instead and hung on a terminal. The section tables are
+# printed from SECTION_DESC so they cannot drift from what actually runs.
+usage() {
+    local s
+    cat <<USAGE
+fedora-postinstall.sh (v3) — opinionated, idempotent Fedora post-install.
+
+Usage:
+  sudo ./fedora-postinstall.sh [flags]
+  sudo bash -c "\$(curl -fsSL $REPO_RAW)" -- [flags]
+
+Flags:
+  --menu                 Interactive picker: check/uncheck sections, then install
+  --nvidia               Force NVIDIA setup even if no card is detected
+  --no-nvidia            Skip NVIDIA even if a card is present
+  --only  a,b,c          Run ONLY these sections
+  --skip  a,b,c          Run the defaults EXCEPT these
+  --with  a,b,c          Add optional sections to the defaults
+  --parallel N           Force dnf parallel downloads (1-20); default: auto-probe
+  --scx VERB             Gaming scheduler: on|off|status|boot-on|boot-off
+  --list                 Print section names only, and exit
+  -h, --help             This text
+
+Default sections (run in order):
+USAGE
+    for s in "${DEFAULT_SECTIONS[@]}"; do
+        printf '  %-11s %s\n' "$s" "${SECTION_DESC[$s]:-}"
+    done
+    printf '\nOptional sections (only with --with):\n'
+    for s in "${OPTIONAL_SECTIONS[@]}"; do
+        printf '  %-11s %s\n' "$s" "${SECTION_DESC[$s]:-}"
+    done
+    cat <<USAGE
+
+Notes:
+  Every step is idempotent — re-running only does what is still missing.
+  Package-based Fedora only: image-based variants (Silverblue, Kinoite, COSMIC
+  Atomic, Bazzite) are refused, they layer with rpm-ostree instead of dnf.
+  Full log: $LOG_FILE
+USAGE
+}
 
 # Interactive section picker. Defaults start checked, optionals unchecked.
 # The result is written into ONLY_SECTIONS so exactly the checked set runs.
@@ -400,9 +515,16 @@ section_nvidia() {
 
     # Secure Boot: generate & enroll a MOK so signed kernel modules load.
     # Critical on dual-boot machines where Secure Boot stays ON for Windows 11.
+    # mokutil has to be INSTALLED before it can be trusted to answer. It is not
+    # present on every Fedora variant, and "command not found" is swallowed by
+    # 2>/dev/null, so a missing binary reads exactly like "Secure Boot is off".
+    # Get that backwards and MOK enrollment is skipped silently — the driver
+    # installs, the unsigned module is refused at boot, and the machine comes up
+    # to a black screen. Install first, ask afterwards.
+    step "Module signing tooling" dnf -y install kmodtool akmods mokutil openssl
+
     if mokutil --sb-state 2>/dev/null | grep -qi "enabled"; then
         warn "Secure Boot is ENABLED — setting up module signing key"
-        step "Install signing tooling" dnf -y install kmodtool akmods mokutil openssl
         if [[ ! -f /etc/pki/akmods/certs/public_key.der ]]; then
             step "Generate signing key (kmodgenca)" kmodgenca -a
             warn "Enrolling MOK key — you will be asked to CREATE A PASSWORD."
@@ -435,8 +557,7 @@ section_nvidia() {
 section_flatpak() {
     header "FLATPAK — Flathub + app bundle"
 
-    step "Add Flathub (system-wide)" flatpak remote-add --if-not-exists \
-        flathub https://dl.flathub.org/repo/flathub.flatpakrepo
+    step "Flatpak + Flathub (system-wide)" ensure_flatpak
     flatpak remote-modify flathub --no-filter --enable 2>/dev/null || true
     ok "Flathub enabled and unfiltered"
 
@@ -450,6 +571,10 @@ section_flatpak() {
     if has_kde; then
         # KDE manages extensions/widgets natively; Flatseal covers permissions.
         ok "KDE detected — Discover + System Settings cover the GNOME-only tools"
+    fi
+    if has_cosmic; then
+        # COSMIC Store reads the system remotes, so Flathub is enough here.
+        ok "COSMIC detected — COSMIC Store picks up Flathub; Flatseal covers permissions"
     fi
 }
 
@@ -467,6 +592,7 @@ section_gaming() {
     step_soft "32-bit graphics libraries" dnf -y install \
         mesa-vulkan-drivers.i686 mesa-dri-drivers.i686
 
+    step "Flatpak + Flathub" ensure_flatpak
     step "ProtonPlus (GE-Proton manager)" \
         flatpak install -y --noninteractive flathub com.vysp3r.ProtonPlus
 
@@ -545,7 +671,12 @@ section_dev() {
     step "uv (Python project/tool manager)" dnf -y install uv
 
     # --- Node: nvm, installed for the real user ----------------------------
-    if [[ ! -d "$REAL_HOME/.nvm" ]]; then
+    # Without a usable home, "$REAL_HOME/.nvm" collapses to "/.nvm" and nvm gets
+    # installed into the filesystem root. Skip rather than make that mess.
+    if [[ -z "$REAL_HOME" || ! -d "$REAL_HOME" ]]; then
+        warn "No home directory for $REAL_USER — skipping nvm/Node"
+        FAILED_STEPS+=("nvm (no home directory for $REAL_USER)")
+    elif [[ ! -d "$REAL_HOME/.nvm" ]]; then
         step "Install nvm ($NVM_VERSION) for $REAL_USER" as_user \
             "curl -fsSL https://raw.githubusercontent.com/nvm-sh/nvm/${NVM_VERSION}/install.sh | bash"
         step "Install latest LTS Node via nvm" as_user \
@@ -701,6 +832,12 @@ section_qol() {
         step_soft "Archive GUI (ark)" dnf -y install ark
         step_soft "Disk usage viewer (filelight)" dnf -y install filelight
     fi
+    if has_cosmic; then
+        # No gnome-tweaks equivalent to install — cosmic-settings already covers
+        # that ground. These two are standalone GTK apps and pull in no shell.
+        step_soft "Archive GUI (file-roller)" dnf -y install file-roller
+        step_soft "Disk usage viewer (baobab)" dnf -y install baobab
+    fi
 
     step "Utilities" dnf -y install \
         htop btop fastfetch wl-clipboard tldr
@@ -750,7 +887,7 @@ section_legion() {
         if [[ -e /sys/firmware/acpi/platform_profile_choices ]]; then
             log "  available: $(< /sys/firmware/acpi/platform_profile_choices)"
         fi
-        ok "Switch with Fn+Q, the GNOME/KDE power panel, or: powerprofilesctl set <mode>"
+        ok "Switch with Fn+Q, your desktop's power panel, or: powerprofilesctl set <mode>"
         ok "Fan RPM readout:  dnf install lm_sensors && sensors-detect"
         return
     fi
@@ -930,8 +1067,7 @@ section_creative() {
     #
     # This section is optional and can run alone (--only creative), so ensure
     # Flathub exists instead of assuming the 'flatpak' section ran first.
-    step "Ensure Flathub remote" flatpak remote-add --if-not-exists \
-        flathub https://dl.flathub.org/repo/flathub.flatpakrepo
+    step "Flatpak + Flathub" ensure_flatpak
 
     step "GIMP" \
         flatpak install -y --noninteractive flathub org.gimp.GIMP
@@ -948,6 +1084,7 @@ section_creative() {
 section_apps() {
     header "APPS — communication & music (Flatpaks)"
 
+    step "Flatpak + Flathub" ensure_flatpak
     step "Vesktop (Discord with proper Wayland screenshare)" \
         flatpak install -y --noninteractive flathub dev.vencord.Vesktop
     step "Spotify" \
@@ -985,7 +1122,7 @@ while [[ $# -gt 0 ]]; do
                        fi ;;
         --list)        printf 'default:  %s\n' "${DEFAULT_SECTIONS[*]}"
                        printf 'optional: %s\n' "${OPTIONAL_SECTIONS[*]}"; exit 0 ;;
-        -h|--help)     sed -n '2,60p' "$0" | grep '^#' | sed 's/^# \{0,1\}//'; exit 0 ;;
+        -h|--help)     usage; exit 0 ;;
         *)             err "Unknown option: $1"; exit 1 ;;
     esac
 done
@@ -993,8 +1130,13 @@ done
 # ---------------------------------------------------------------------------
 # Main
 # ---------------------------------------------------------------------------
+validate_sections --only "$ONLY_SECTIONS"
+validate_sections --skip "$SKIP_SECTIONS"
+validate_sections --with "$WITH_SECTIONS"
+
 require_root "${ORIGINAL_ARGS[@]}"
 require_fedora
+require_mutable_system
 touch "$LOG_FILE"
 
 header "Fedora post-install (v3) — log: $LOG_FILE"

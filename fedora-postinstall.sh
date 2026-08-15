@@ -21,6 +21,7 @@
 #   distrobox   containerized dev environments (Podman-backed)
 #   wine        Wine + winetricks (non-Steam Windows software)
 #   lutris      Lutris game launcher (Epic/GOG/emulators/install scripts)
+#   heroic      Heroic Games Launcher — GOG/Epic/Amazon libraries (Flatpak)
 #   faugus      Faugus Launcher — minimal UMU/Proton launcher for Windows games
 #   gametweaks  scx_lavd scheduler as a TOGGLE (stock kernel), split_lock_detect=off
 #   creative    GIMP, Inkscape, Kdenlive, Audacity, Blender — Flatpaks
@@ -61,7 +62,7 @@ set -uo pipefail
 LOG_FILE="/var/log/fedora-postinstall.log"
 REPO_RAW="https://raw.githubusercontent.com/Isidro-Zertucha/fedora-postinstall/main/fedora-postinstall.sh"
 DEFAULT_SECTIONS=(base codecs nvidia flatpak gaming snapper media dev virt qol)
-OPTIONAL_SECTIONS=(legion asus distrobox wine lutris faugus gametweaks creative apps)
+OPTIONAL_SECTIONS=(legion asus distrobox wine lutris heroic faugus gametweaks creative apps)
 FORCE_NVIDIA=""          # "", "yes", "no"
 ONLY_SECTIONS=""
 SKIP_SECTIONS=""
@@ -322,6 +323,7 @@ declare -A SECTION_DESC=(
     [distrobox]="containerized dev environments (Podman)"
     [wine]="Wine + winetricks (non-Steam Windows software)"
     [lutris]="launcher for Epic/GOG/emulators/install scripts"
+    [heroic]="GOG/Epic/Amazon library launcher (Flathub)"
     [faugus]="minimal UMU/Proton launcher for Windows games"
     [gametweaks]="scx_lavd game-mode toggle, split-lock off"
     [creative]="GIMP, Inkscape, Kdenlive, Audacity, Blender (Flathub)"
@@ -1077,6 +1079,18 @@ section_lutris() {
     header "LUTRIS — launcher for Epic/GOG/emulators/non-Steam games"
 
     step "Install Lutris" dnf -y install lutris
+}
+
+section_heroic() {
+    header "HEROIC — GOG / Epic / Amazon library launcher"
+
+    step "Flatpak + Flathub" ensure_flatpak
+    step "Install Heroic Games Launcher" \
+        flatpak install -y --noninteractive flathub com.heroicgameslauncher.hgl
+
+    ok "GOG Galaxy has no Linux client yet (announced Jul 2026, no release date)"
+    ok "Overlaps Lutris — Heroic is store-first (log in, install, play);"
+    ok "Lutris is the full platform (emulators, install scripts, custom runners)."
 }
 
 section_faugus() {

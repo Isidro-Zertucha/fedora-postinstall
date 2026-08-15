@@ -88,6 +88,7 @@ sudo ./fedora-postinstall.sh --menu
 | `distrobox`  | Containerized dev environments (Podman-backed) |
 | `wine`       | Wine + winetricks for non-Steam Windows software |
 | `lutris`     | Lutris launcher (Epic / GOG / emulators / community install scripts) |
+| `heroic`     | Heroic Games Launcher (Flathub) — GOG, Epic and Amazon libraries. GOG Galaxy still has no Linux client (announced July 2026, no release date), so this is how you get a GOG library on Fedora. Overlaps `lutris`: Heroic is store-first, Lutris is the full platform |
 | `faugus`     | Faugus Launcher — minimal UMU/Proton launcher for individual Windows games (native COPR build; built-in GE-Proton manager). Overlaps `lutris`: pick the simple per-`.exe` tool (`faugus`) or the full platform (`lutris`) |
 | `gametweaks` | `scx_lavd` scheduler as a **toggle** (stock kernel) + `split_lock_detect=off` |
 | `creative`   | GIMP, Inkscape, Kdenlive, Audacity, Blender |

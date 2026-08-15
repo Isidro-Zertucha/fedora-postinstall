@@ -154,6 +154,32 @@ has_gnome()      { rpm -q gnome-shell >/dev/null 2>&1; }
 has_kde()        { rpm -q plasma-desktop >/dev/null 2>&1 || rpm -q plasma-workspace >/dev/null 2>&1; }
 has_cosmic()     { rpm -q cosmic-session >/dev/null 2>&1 || rpm -q cosmic-comp >/dev/null 2>&1; }
 
+# Which NVIDIA driver branch this GPU needs — echoes a legacy suffix ("580xx",
+# "470xx", "390xx") or nothing for the current branch.
+#
+# R595 dropped Maxwell, Pascal and Volta, and `akmod-nvidia` always resolves to
+# the newest branch. On a GTX 10-series that builds a module which does not
+# support the card: it compiles, `modinfo -F version nvidia` prints a version,
+# every check in this script goes green, and the machine boots to a black
+# screen. The failure has to be caught here or it is not caught at all.
+#
+# Routing is by chip codename because that is how NVIDIA's own support matrix is
+# written. An unrecognised name falls through to the current branch on purpose —
+# a chip missing from this machine's pci.ids is newer than the last drop, not
+# older.
+nvidia_branch() {
+    local codename
+    codename=$(lspci -nn | grep -Ei 'vga|3d' | grep -i nvidia |
+        grep -oE 'NVIDIA Corporation [A-Z]{2}[0-9]+' | awk '{print $3}' | head -n1)
+
+    case "$codename" in
+        G[MPV][0-9]*) echo "580xx" ;;   # Maxwell, Pascal, Volta
+        GK[0-9]*)     echo "470xx" ;;   # Kepler
+        GF[0-9]*)     echo "390xx" ;;   # Fermi
+        *)            echo "" ;;        # Turing and newer
+    esac
+}
+
 # A typo in --only/--skip/--with matches no section at all, and the run then
 # reports "All steps completed successfully" having installed precisely nothing.
 # Silence is the wrong answer to a misspelled flag.
@@ -513,6 +539,17 @@ section_nvidia() {
 
     header "NVIDIA — proprietary driver (akmod), CUDA/NVENC, Secure Boot signing"
 
+    # Every package of a legacy branch must carry the same suffix. A mixed set
+    # (akmod-nvidia-580xx with a current xorg-x11-drv-nvidia) installs cleanly
+    # and then fails to load, which looks identical to a build failure.
+    local branch suffix=""
+    branch=$(nvidia_branch)
+    if [[ -n "$branch" ]]; then
+        suffix="-$branch"
+        warn "This GPU predates the current driver branch — using legacy $branch"
+        warn "Open kernel modules need Turing or newer, so they stay off here."
+    fi
+
     # Secure Boot: generate & enroll a MOK so signed kernel modules load.
     # Critical on dual-boot machines where Secure Boot stays ON for Windows 11.
     # mokutil has to be INSTALLED before it can be trusted to answer. It is not
@@ -538,12 +575,19 @@ section_nvidia() {
     fi
 
     step "Install NVIDIA driver (akmod) + CUDA/NVENC support" dnf -y install \
-        akmod-nvidia xorg-x11-drv-nvidia-cuda
+        "akmod-nvidia${suffix}" "xorg-x11-drv-nvidia${suffix}-cuda"
 
-    # RTX 50-series (Blackwell) requires the open kernel module.
-    if ! grep -q "kmod_nvidia_open" /etc/rpm/macros.nvidia-kmod 2>/dev/null; then
+    # The settings GUI ships as a dependency today, but it is branch-suffixed
+    # too — naming it keeps a legacy install from pulling the current-branch one.
+    step_soft "NVIDIA settings GUI" dnf -y install "nvidia-settings${suffix}"
+
+    # RPM Fusion builds open modules by default since the R595 move, so this is
+    # a no-op on an up-to-date box and a fallback on an older one. Current
+    # branch only: open modules do not support Maxwell/Pascal/Volta.
+    if [[ -z "$branch" ]] &&
+       ! grep -q "kmod_nvidia_open" /etc/rpm/macros.nvidia-kmod 2>/dev/null; then
         echo '%_with_kmod_nvidia_open 1' > /etc/rpm/macros.nvidia-kmod
-        ok "Forced open kernel modules (required for RTX 50-series)"
+        ok "Open kernel modules pinned on (required for RTX 50-series)"
     fi
 
     log "Building kernel module now (this takes a few minutes)..."
@@ -1166,8 +1210,13 @@ else
 fi
 
 if has_nvidia_gpu && [[ "$FORCE_NVIDIA" != "no" ]]; then
+    NVIDIA_BRANCH=$(nvidia_branch)
     warn "NVIDIA checklist before reboot:"
     warn "  1. modinfo -F version nvidia   → must print a version"
+    if [[ -n "$NVIDIA_BRANCH" ]]; then
+        warn "     This GPU needs the ${NVIDIA_BRANCH%xx}.x branch — a version from any"
+        warn "     other branch means the module will not drive the card."
+    fi
     warn "  2. If Secure Boot: expect the MOK Manager screen on reboot"
 fi
 # Third-party repos are the usual reason `dnf system-upgrade` fails: a COPR or

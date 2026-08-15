@@ -70,7 +70,7 @@ sudo ./fedora-postinstall.sh --menu
 |-----------|--------------|
 | `base`    | dnf tuning (auto-probed parallel downloads), full update, RPM Fusion (free + nonfree + tainted), firmware updates via LVFS, faster boot, an `update-all` helper |
 | `codecs`  | Full `ffmpeg`, GStreamer plugins, and per-GPU hardware video acceleration (AMD / Intel / NVIDIA) |
-| `nvidia`  | Proprietary driver (akmod) + CUDA/NVENC, **open kernel modules** (needed for RTX 50-series), and **Secure Boot module signing** (MOK enrollment) — *auto-detected* |
+| `nvidia`  | Proprietary driver (akmod) + CUDA/NVENC, **driver branch matched to the GPU** (legacy `580xx`/`470xx`/`390xx` for pre-Turing cards), **open kernel modules** (needed for RTX 50-series), and **Secure Boot module signing** (MOK enrollment) — *auto-detected* |
 | `flatpak` | Flathub (unfiltered) + Flatseal, plus Extension Manager on GNOME |
 | `gaming`  | Steam, `steam-devices`, gamescope, MangoHud, GOverlay, vkBasalt, GameMode, protontricks, ProtonPlus, `vm.max_map_count` tweak |
 | `snapper` | Btrfs snapshots + dnf integration + Btrfs Assistant GUI (skipped if root isn't Btrfs) |
@@ -147,6 +147,11 @@ If you have an NVIDIA GPU, **verify before rebooting**:
 modinfo -F version nvidia    # must print a version number
 ```
 
+- The version must belong to the branch your card needs. Driver **595** dropped
+  Maxwell, Pascal and Volta (GTX 900 / 10-series, Quadro P), so those cards get
+  the legacy `580xx` packages instead. The script picks the branch by GPU, but
+  the check is worth doing: a module from the wrong branch builds and loads
+  metadata fine, then leaves you on a black screen.
 - If **Secure Boot** is on, a blue **MOK Manager** screen appears on the next reboot:
   *Enroll MOK → Continue → Yes → enter the password you set → reboot.*
 - Then reboot: `systemctl reboot`

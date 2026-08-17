@@ -18,6 +18,9 @@
 # Optional sections (only with --with):
 #   legion      Lenovo Legion power modes (verifies native kernel support first)
 #   asus        asusctl + supergfxctl (ASUS laptops, asus-linux.org COPR)
+#   battery     charge threshold (default 80%) — vendor-neutral, detected at
+#               runtime from the power_supply sysfs class, so Lenovo/ASUS/
+#               ThinkPad/Huawei/Framework are all the same code path
 #   distrobox   containerized dev environments (Podman-backed)
 #   wine        Wine + winetricks (non-Steam Windows software)
 #   lutris      Lutris game launcher (Epic/GOG/emulators/install scripts)
@@ -33,6 +36,14 @@
 #   on/off    = this session only (game session vs compile session)
 #   boot-on/off = persist across reboots
 #   AUTO: games launched with 'gamemoderun %command%' flip scx_lavd on/off themselves.
+#
+# Runtime toggles (after battery is installed):
+#   sudo ./fedora-postinstall.sh --battery 80|full|status
+#   (or the installed shortcut:  battery-limit 80|full|status)
+#   80    = stop charging at 80% — the setting that actually extends cell life
+#   full  = charge to 100% before travelling
+#   Persists across reboot AND resume; re-run 'full' every few months to let
+#   the gauge recalibrate.
 #
 # Desktop-aware: GNOME, KDE Plasma and COSMIC — GNOME gets Extension
 # Manager/Tweaks/file-roller, KDE gets ark/filelight, COSMIC gets
@@ -62,7 +73,7 @@ set -uo pipefail
 LOG_FILE="/var/log/fedora-postinstall.log"
 REPO_RAW="https://raw.githubusercontent.com/Isidro-Zertucha/fedora-postinstall/main/fedora-postinstall.sh"
 DEFAULT_SECTIONS=(base codecs nvidia flatpak gaming snapper media dev virt qol)
-OPTIONAL_SECTIONS=(legion asus distrobox wine lutris heroic faugus gametweaks creative apps)
+OPTIONAL_SECTIONS=(legion asus battery distrobox wine lutris heroic faugus gametweaks creative apps)
 FORCE_NVIDIA=""          # "", "yes", "no"
 ONLY_SECTIONS=""
 SKIP_SECTIONS=""
@@ -320,6 +331,7 @@ declare -A SECTION_DESC=(
     [qol]="fonts, archives, monitors, desktop-matched extras"
     [legion]="Lenovo Legion power modes (native kernel check)"
     [asus]="asusctl + supergfxctl (ASUS laptops)"
+    [battery]="charge cap at 80% — any vendor, persists reboot/resume"
     [distrobox]="containerized dev environments (Podman)"
     [wine]="Wine + winetricks (non-Steam Windows software)"
     [lutris]="launcher for Epic/GOG/emulators/install scripts"
@@ -352,6 +364,7 @@ Flags:
   --with  a,b,c          Add optional sections to the defaults
   --parallel N           Force dnf parallel downloads (1-20); default: auto-probe
   --scx VERB             Gaming scheduler: on|off|status|boot-on|boot-off
+  --battery VERB         Charge cap: <40-100>|full|status|apply
   --list                 Print section names only, and exit
   -h, --help             This text
 
@@ -968,6 +981,368 @@ section_asus() {
     ok "ROG Control Center: rog-control-center | GPU modes: supergfxctl -m <mode>"
 }
 
+section_battery() {
+    header "BATTERY — charge threshold (Lenovo, ASUS, ThinkPad, anything that exposes it)"
+
+    # Deliberately vendor-neutral, and that is the whole design.
+    #
+    # Lenovo (ideapad_laptop, thinkpad_acpi), ASUS (asus-wmi), Huawei
+    # (huawei-wmi), System76 and Framework all register the SAME power_supply
+    # attributes: charge_control_start_threshold / charge_control_end_threshold.
+    # A per-vendor section would be N copies of one write to sysfs, gated on a
+    # DMI string that says nothing about whether the feature is actually there —
+    # plenty of Legions expose it and plenty of others do not, same model line.
+    # What genuinely differs is which of three interfaces the firmware offers,
+    # so that is detected at runtime and nothing is inferred from the vendor.
+    #
+    # Deliberately NOT TLP. TLP is the answer every forum gives for charge
+    # thresholds and it is the wrong one here: it conflicts with
+    # power-profiles-daemon, which Fedora ships by default and which backs the
+    # GNOME/KDE power panels AND the platform_profile modes the 'legion'
+    # section points at. Trading working Fn+Q power modes for a threshold that
+    # a oneshot unit writes just as well is a bad deal.
+    install_battery_limit_tool
+
+    local iface
+    iface=$(/usr/local/bin/battery-limit detect 2>/dev/null | awk '{print $1}')
+
+    case "$iface" in
+        range|end)
+            ok "Charge threshold supported natively (interface: $iface)"
+            ;;
+        conservation)
+            warn "Only ideapad conservation mode is exposed: an on/off switch, no free value."
+            warn "The firmware picks the cap (~55-60%) and ignores any percentage you pass."
+            ;;
+        nobattery)
+            warn "No system battery found — desktop or VM. Section skipped."
+            rm -f /usr/local/bin/battery-limit
+            return
+            ;;
+        *)
+            warn "This machine's firmware exposes no charge-threshold interface."
+            warn "Checked: charge_control_end_threshold on every power_supply battery,"
+            warn "         and ideapad_acpi conservation_mode."
+            warn "Some models only expose it once the vendor module is loaded:"
+            warn "  Lenovo Legion 2020-2023 → LenovoLegionLinux (see the 'legion' section)"
+            warn "  ASUS                    → asusctl/asus-wmi (--with asus)"
+            warn "Nothing to persist, so no service was installed."
+            rm -f /usr/local/bin/battery-limit
+            return
+            ;;
+    esac
+
+    # Re-running must not silently overwrite a threshold the user has since
+    # tuned by hand — the whole point of the config file is that it outlives
+    # this script.
+    if [[ -f /etc/default/battery-limit ]]; then
+        ok "Keeping existing setting: $(grep -s '^BATTERY_STOP' /etc/default/battery-limit)"
+    else
+        cat > /etc/default/battery-limit <<'BATCONF'
+# Stop charging at this percentage. 100 disables the cap (travel mode).
+# Change it with:  sudo battery-limit 80   /   sudo battery-limit full
+BATTERY_STOP_THRESHOLD=80
+BATCONF
+        ok "Default cap set to 80%"
+    fi
+
+    install_battery_limit_service
+
+    step "Apply charge threshold now" /usr/local/bin/battery-limit apply
+    /usr/local/bin/battery-limit status | while read -r l; do ok "  $l"; done
+
+    ok "Change it anytime:  sudo battery-limit 80   |   travel: sudo battery-limit full"
+    ok "Check it:           battery-limit status"
+
+    # Two conflicts worth naming while the user is looking at the output.
+    if has_gnome; then
+        warn "GNOME's Settings > Power has its own 'Battery charge limit' toggle."
+        warn "It writes the same sysfs attribute — set it in ONE place, not both."
+    fi
+    if command -v asusctl >/dev/null 2>&1; then
+        warn "asusctl is installed and asusd also manages the charge limit."
+        warn "Keep them in sync ('asusctl -c 80') or asusd will win at boot."
+    fi
+
+    # Capping forever is correct for the cell and wrong for the gauge.
+    warn "Capped batteries drift out of calibration: the percentage readout slowly"
+    warn "lies because the gauge never sees a full charge. Every few months run"
+    warn "'sudo battery-limit full', charge to 100%, then set the cap back."
+}
+
+# The runtime tool. Self-contained on purpose: it is also what the systemd unit
+# and the udev rule invoke, long after this installer has exited.
+install_battery_limit_tool() {
+    cat > /usr/local/bin/battery-limit <<'BATLIM'
+#!/usr/bin/env bash
+# battery-limit — cap charging to protect the cell.
+#
+#   battery-limit             show current state
+#   battery-limit 80          stop charging at 80% (persisted across reboots)
+#   battery-limit full        charge to 100% (travel mode, persisted)
+#   battery-limit apply       re-apply the saved value (systemd/udev entry point)
+#   battery-limit detect      print "<interface> <battery path>" for scripts
+#
+# Works on any laptop whose driver exposes the standard power_supply controls:
+# Lenovo, ASUS, ThinkPad, Huawei, System76, Framework.
+set -uo pipefail
+
+CONF=/etc/default/battery-limit
+
+# Read a sysfs attribute, empty string if it is missing or unreadable.
+#
+# This exists because $(< "$f" 2>/dev/null) does NOT do what it looks like.
+# $(<file) is a bash fast path only when the redirection is the ONLY thing
+# inside the substitution; adding 2>/dev/null turns it into a command
+# substitution running an empty command, which yields an empty string for
+# every file — including ones that read perfectly well. Silent, and it would
+# have made every verify() below pass an empty value against its target.
+readval() {
+    [[ -r "$1" ]] || return 1
+    printf '%s' "$(< "$1")"
+}
+
+# The node is not always BAT0 — BAT1, BATT and CMB0 all ship in the wild, and
+# /sys/class/power_supply also lists AC adapters and USB-PD ports. Filter on
+# the type attribute, then drop scope=Device: wireless mice and controllers
+# register as type=Battery too, and capping a mouse is not the goal.
+batteries() {
+    local p scope
+    for p in /sys/class/power_supply/*; do
+        [[ -r "$p/type" ]] || continue
+        [[ "$(< "$p/type")" == "Battery" ]] || continue
+        scope=""
+        [[ -r "$p/scope" ]] && scope=$(< "$p/scope")
+        [[ "$scope" == "Device" ]] && continue
+        printf '%s\n' "$p"
+    done
+}
+
+conservation_node() {
+    local n
+    for n in /sys/bus/platform/drivers/ideapad_acpi/*/conservation_mode; do
+        [[ -e "$n" ]] && { printf '%s\n' "$n"; return 0; }
+    done
+    return 1
+}
+
+iface_for() {
+    local bat="$1"
+    if [[ -e "$bat/charge_control_start_threshold" && -e "$bat/charge_control_end_threshold" ]]; then
+        echo range
+    elif [[ -e "$bat/charge_control_end_threshold" ]]; then
+        echo end
+    elif conservation_node >/dev/null; then
+        echo conservation
+    else
+        echo none
+    fi
+}
+
+first_battery() { batteries | head -n1; }
+
+detect() {
+    local bat
+    bat=$(first_battery)
+    [[ -z "$bat" ]] && { echo "nobattery -"; return; }
+    echo "$(iface_for "$bat") $bat"
+}
+
+read_conf() {
+    local v=80
+    [[ -r "$CONF" ]] && v=$(awk -F= '/^BATTERY_STOP_THRESHOLD=/{gsub(/[^0-9]/,"",$2); print $2}' "$CONF")
+    [[ "$v" =~ ^[0-9]+$ ]] || v=80
+    (( v < 1 || v > 100 )) && v=80
+    echo "$v"
+}
+
+write_conf() {
+    cat > "$CONF" <<EOF
+# Stop charging at this percentage. 100 disables the cap (travel mode).
+# Change it with:  sudo battery-limit 80   /   sudo battery-limit full
+BATTERY_STOP_THRESHOLD=$1
+EOF
+}
+
+# Writing a value that is already set still emits a sysfs change event, and the
+# udev rule that calls this script listens for exactly those. Skipping the
+# no-op write is what keeps that from looping.
+poke() {
+    local node="$1" val="$2"
+    [[ -e "$node" ]] || return 1
+    [[ "$(readval "$node")" == "$val" ]] && return 0
+    printf '%s\n' "$val" > "$node" 2>/dev/null
+}
+
+apply_to() {
+    local bat="$1" stop="$2" iface start
+    iface=$(iface_for "$bat")
+
+    case "$iface" in
+        range)
+            # Order matters. Both drivers reject a write that would put start
+            # above end, so going UP fails if start is written first and going
+            # DOWN fails if end is. Dropping start to 0 first (always legal,
+            # means "no start threshold") makes either direction valid.
+            start=0
+            (( stop > 5 && stop < 100 )) && start=$(( stop - 5 ))
+            poke "$bat/charge_control_start_threshold" 0
+            poke "$bat/charge_control_end_threshold" "$stop"
+            poke "$bat/charge_control_start_threshold" "$start"
+            ;;
+        end)
+            poke "$bat/charge_control_end_threshold" "$stop"
+            ;;
+        conservation)
+            local node
+            node=$(conservation_node) || return 1
+            if (( stop >= 100 )); then poke "$node" 0; else poke "$node" 1; fi
+            ;;
+        *)
+            return 1
+            ;;
+    esac
+
+    # Never trust the write. Drivers accept only certain values on some models
+    # and fail with EINVAL on the rest; an unverified write reports success
+    # while the battery keeps charging to 100%.
+    verify "$bat" "$stop"
+}
+
+verify() {
+    local bat="$1" want="$2" got iface
+    iface=$(iface_for "$bat")
+    case "$iface" in
+        range|end) got=$(readval "$bat/charge_control_end_threshold") ;;
+        conservation)
+            got=$(readval "$(conservation_node)")
+            [[ "$got" == "1" && "$want" -lt 100 ]] && return 0
+            [[ "$got" == "0" && "$want" -ge 100 ]] && return 0
+            return 1
+            ;;
+        *) return 1 ;;
+    esac
+    [[ "$got" == "$want" ]]
+}
+
+need_root() {
+    [[ $EUID -eq 0 ]] && return 0
+    exec sudo -- "$0" "$@"
+}
+
+status() {
+    local bat iface stop cap
+    bat=$(first_battery)
+    if [[ -z "$bat" ]]; then echo "no system battery found"; return 1; fi
+    iface=$(iface_for "$bat")
+    cap=$(readval "$bat/capacity")
+    stop=$(read_conf)
+
+    echo "battery:   ${bat##*/} (${cap:-?}% now)"
+    echo "interface: $iface"
+    case "$iface" in
+        range|end)
+            echo "cap:       $(readval "$bat/charge_control_end_threshold")% (configured: ${stop}%)"
+            ;;
+        conservation)
+            if [[ "$(readval "$(conservation_node)")" == "1" ]]; then
+                echo "cap:       conservation mode ON (firmware picks ~55-60%)"
+            else
+                echo "cap:       conservation mode OFF (charges to 100%)"
+            fi
+            ;;
+        *) echo "cap:       unsupported on this hardware" ;;
+    esac
+    systemctl is-enabled battery-limit.service &>/dev/null &&
+        echo "at boot:   enabled" || echo "at boot:   not enabled"
+}
+
+case "${1:-status}" in
+    status|"")  status ;;
+    detect)     detect ;;
+    apply)
+        need_root "$@"
+        stop=$(read_conf); rc=0
+        while read -r bat; do
+            apply_to "$bat" "$stop" || rc=1
+        done < <(batteries)
+        exit $rc
+        ;;
+    full|100)
+        need_root "$@"
+        write_conf 100
+        rc=0
+        while read -r bat; do apply_to "$bat" 100 || rc=1; done < <(batteries)
+        (( rc == 0 )) && echo "travel mode: charging to 100%"
+        status
+        exit $rc
+        ;;
+    [0-9]|[0-9][0-9])
+        need_root "$@"
+        want="$1"
+        if (( want < 40 )); then
+            echo "refusing ${want}%: below ~40% the cap fights normal use and the" >&2
+            echo "gauge decalibrates fast. 60-80 is the useful range." >&2
+            exit 1
+        fi
+        write_conf "$want"
+        rc=0
+        while read -r bat; do apply_to "$bat" "$want" || rc=1; done < <(batteries)
+        if (( rc != 0 )); then
+            echo "the driver rejected ${want}% — some firmware accepts only fixed steps" >&2
+            echo "(often 60/80/100). Try one of those." >&2
+        fi
+        status
+        exit $rc
+        ;;
+    -h|--help)
+        echo "usage: battery-limit {status|<40-100>|full|apply|detect}"
+        ;;
+    *)
+        echo "usage: battery-limit {status|<40-100>|full|apply|detect}" >&2
+        exit 1
+        ;;
+esac
+BATLIM
+    chmod +x /usr/local/bin/battery-limit
+}
+
+# sysfs thresholds do not survive a reboot, and several drivers drop them across
+# suspend or when the AC adapter is re-plugged. Boot alone is not enough.
+install_battery_limit_service() {
+    cat > /etc/systemd/system/battery-limit.service <<'BATSVC'
+[Unit]
+Description=Apply battery charge threshold
+Documentation=man:systemd.sleep(7)
+After=suspend.target hibernate.target hybrid-sleep.target suspend-then-hibernate.target
+ConditionPathExists=/usr/local/bin/battery-limit
+
+[Service]
+Type=oneshot
+ExecStart=/usr/local/bin/battery-limit apply
+RemainAfterExit=no
+
+[Install]
+WantedBy=multi-user.target suspend.target hibernate.target hybrid-sleep.target suspend-then-hibernate.target
+BATSVC
+
+    # WantedBy=multi-user covers boot; the sleep targets combined with After=
+    # make the same unit run on the way OUT of suspend, which is when several
+    # ideapad and asus-wmi models have quietly reset the threshold.
+    #
+    # The udev rule catches the third case: the battery being re-added on an AC
+    # transition. It starts the unit rather than running the tool directly so
+    # udev is not blocked on sysfs writes, and apply skips no-op writes so the
+    # change event it would otherwise emit cannot feed back into this rule.
+    cat > /etc/udev/rules.d/99-battery-limit.rules <<'BATUDEV'
+ACTION=="add|change", SUBSYSTEM=="power_supply", ATTR{type}=="Battery", \
+    RUN+="/usr/bin/systemctl start --no-block battery-limit.service"
+BATUDEV
+
+    step "Enable battery-limit at boot and after resume" bash -c \
+        'systemctl daemon-reload && systemctl enable battery-limit.service && udevadm control --reload-rules'
+}
+
 section_distrobox() {
     header "DISTROBOX — containerized dev environments (Podman-backed)"
 
@@ -1176,6 +1551,14 @@ while [[ $# -gt 0 ]]; do
                            exec scx-toggle "$2"
                        else
                            err "scx-toggle not installed — run with --with gametweaks first"
+                           exit 1
+                       fi ;;
+        --battery)     if [[ -z "${2:-}" ]]; then
+                           err "--battery needs a verb: <40-100>|full|status|apply"; exit 1
+                       elif command -v battery-limit >/dev/null 2>&1; then
+                           exec battery-limit "$2"
+                       else
+                           err "battery-limit not installed — run with --with battery first"
                            exit 1
                        fi ;;
         --list)        printf 'default:  %s\n' "${DEFAULT_SECTIONS[*]}"

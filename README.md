@@ -85,6 +85,7 @@ sudo ./fedora-postinstall.sh --menu
 |--------------|--------------|
 | `legion`     | LenovoLegionLinux — community fan/power control (falls back to source instructions if COPR is stale) |
 | `asus`       | asusctl + supergfxctl (ASUS laptops, asus-linux.org COPR) |
+| `battery`    | Charge threshold, default 80%, persisted across reboot **and** resume. Vendor-neutral: detected from the `power_supply` sysfs class, so Lenovo, ASUS, ThinkPad, Huawei and Framework are one code path. Installs the `battery-limit` tool |
 | `distrobox`  | Containerized dev environments (Podman-backed) |
 | `wine`       | Wine + winetricks for non-Steam Windows software |
 | `lutris`     | Lutris launcher (Epic / GOG / emulators / community install scripts) |
@@ -107,6 +108,7 @@ sudo ./fedora-postinstall.sh --menu
 --with  a,b,c          Add optional sections to the defaults
 --parallel N           Force dnf parallel downloads (1–20); default: auto-probe the network
 --scx VERB             Gaming scheduler toggle: on|off|status|boot-on|boot-off
+--battery VERB         Charge cap: <40-100>|full|status|apply
 --list                 List available sections and exit
 -h, --help             Show usage (works both locally and via curl)
 ```
@@ -137,6 +139,52 @@ scx-toggle status      # show current state
 ```
 
 Games launched with `gamemoderun %command%` flip it on/off **automatically** via GameMode hooks.
+
+---
+
+## Runtime toggle: battery charge cap
+
+Installing `battery` caps charging at 80% and keeps it there across reboots, suspend/resume and
+AC re-plugs:
+
+```bash
+sudo battery-limit 80      # stop charging at 80% (persisted)
+sudo battery-limit full    # charge to 100% before travelling
+battery-limit status       # current cap, interface in use, boot state
+```
+
+**Why a cap and not "fewer charges".** A charge cycle is not one plug-in — it is 100% of capacity
+moved in total, however it accumulates. Two days of 80% → 30% is *one* cycle. So counting how often
+you plug in optimises nothing. What actually kills the cell is time spent at a high state of charge,
+and heat — which is why this matters more on a gaming laptop, where the pack sits next to a heatsink
+dumping 100 W+. Shallow cycles help too: laboratory data puts 100% depth-of-discharge at roughly
+300–500 cycles versus ~1200–1500 at 50%.
+
+**How the detection works.** Lenovo (`ideapad_laptop`, `thinkpad_acpi`), ASUS (`asus-wmi`), Huawei,
+System76 and Framework all register the same kernel attributes, so there is no per-vendor code —
+only three interfaces, probed at runtime:
+
+| Interface      | What the firmware exposes | Typical driver |
+|----------------|---------------------------|----------------|
+| `range`        | Start *and* stop thresholds, any value | `thinkpad_acpi` |
+| `end`          | Stop threshold only | `asus-wmi`, many Legions |
+| `conservation` | On/off; firmware picks ~55–60%, your number is ignored | `ideapad_acpi` |
+
+Every write is read back and verified — some firmware accepts only fixed steps (often 60/80/100)
+and rejects anything else with `EINVAL`, which otherwise looks exactly like success while the
+battery keeps charging to 100%.
+
+**Deliberately not TLP.** TLP is the usual forum answer for charge thresholds and it is the wrong
+one on Fedora: it conflicts with `power-profiles-daemon`, which backs the GNOME/KDE power panels and
+the `platform_profile` modes the `legion` section points at. A oneshot systemd unit sets the same
+threshold without trading those away.
+
+**Recalibrate now and then.** A permanently capped battery decalibrates its gauge — the percentage
+readout drifts because it never observes a full charge. Every few months run `sudo battery-limit
+full`, charge to 100%, then set the cap back.
+
+> If GNOME's **Settings → Power → Battery charge limit** is also on, set the limit in one place
+> only — both write the same sysfs attribute. Same for `asusctl -c` if `asusctl` is installed.
 
 ---
 

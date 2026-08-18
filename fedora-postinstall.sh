@@ -29,6 +29,8 @@
 #   gametweaks  scx_lavd scheduler as a TOGGLE (stock kernel), split_lock_detect=off
 #   creative    GIMP, Inkscape, Kdenlive, Audacity, Blender — Flatpaks
 #   apps        Discord (Vesktop), Spotify, Telegram — Flatpaks
+#   mycomputer  "My Computer" drives/volumes panel for GNOME Files (Nautilus
+#               extension, upstream COPR — needs Fedora 43+ and Nautilus)
 #
 # Runtime toggles (after gametweaks is installed):
 #   sudo ./fedora-postinstall.sh --scx on|off|status|boot-on|boot-off
@@ -73,7 +75,7 @@ set -uo pipefail
 LOG_FILE="/var/log/fedora-postinstall.log"
 REPO_RAW="https://raw.githubusercontent.com/Isidro-Zertucha/fedora-postinstall/main/fedora-postinstall.sh"
 DEFAULT_SECTIONS=(base codecs nvidia flatpak gaming snapper media dev virt qol)
-OPTIONAL_SECTIONS=(legion asus battery distrobox wine lutris heroic faugus gametweaks creative apps)
+OPTIONAL_SECTIONS=(legion asus battery distrobox wine lutris heroic faugus gametweaks creative apps mycomputer)
 FORCE_NVIDIA=""          # "", "yes", "no"
 ONLY_SECTIONS=""
 SKIP_SECTIONS=""
@@ -165,6 +167,7 @@ has_intel_gpu()  { lspci -nn | grep -Ei 'vga|3d' | grep -qi intel; }
 has_gnome()      { rpm -q gnome-shell >/dev/null 2>&1; }
 has_kde()        { rpm -q plasma-desktop >/dev/null 2>&1 || rpm -q plasma-workspace >/dev/null 2>&1; }
 has_cosmic()     { rpm -q cosmic-session >/dev/null 2>&1 || rpm -q cosmic-comp >/dev/null 2>&1; }
+has_nautilus()   { rpm -q nautilus >/dev/null 2>&1; }
 
 # Which NVIDIA driver branch this GPU needs — echoes a legacy suffix ("580xx",
 # "470xx", "390xx") or nothing for the current branch.
@@ -340,6 +343,7 @@ declare -A SECTION_DESC=(
     [gametweaks]="scx_lavd game-mode toggle, split-lock off"
     [creative]="GIMP, Inkscape, Kdenlive, Audacity, Blender (Flathub)"
     [apps]="Discord (Vesktop), Spotify, Telegram (Flatpaks)"
+    [mycomputer]="'My Computer' drives panel for GNOME Files (Nautilus)"
 )
 
 # Help text. Deliberately NOT parsed out of the file's own header: run remotely
@@ -1524,6 +1528,44 @@ section_apps() {
         flatpak install -y --noninteractive flathub com.spotify.Client
     step "Telegram" \
         flatpak install -y --noninteractive flathub org.telegram.desktop
+}
+
+section_mycomputer() {
+    header "MY COMPUTER — drives & volumes panel for GNOME Files"
+
+    # Gated on Nautilus itself, not on has_gnome: this is a Nautilus extension,
+    # and Nautilus is perfectly installable next to Plasma or COSMIC. Checking
+    # for gnome-shell would refuse a setup that actually works and accept a
+    # GNOME install where the user swapped Files out.
+    if ! has_nautilus; then
+        warn "Nautilus is not installed — nothing to extend. Section skipped."
+        return
+    fi
+
+    # Upstream's own COPR, which only builds for Fedora 43+ (the README claims
+    # 41-44, but the repo is empty below 43). The guard turns that into a clean
+    # skip instead of a dead repo left behind on the system.
+    if ! copr_enable_guarded yannmasoch/nautilus-my-computer nautilus-my-computer; then
+        err "my-computer COPR unusable on Fedora $FEDORA_VER — section skipped"
+        FAILED_STEPS+=("nautilus-my-computer — COPR has no packages for F$FEDORA_VER")
+        return
+    fi
+
+    step "Install My Computer for GNOME Files" dnf -y install nautilus-my-computer
+
+    local nver
+    nver=$(rpm -q --qf '%{VERSION}' nautilus 2>/dev/null)
+    nver=${nver%%.*}
+    if [[ "$nver" =~ ^[0-9]+$ ]] && (( nver < 50 )); then
+        warn "GNOME Files $nver — the panel loads, but the full feature set needs Files 50+"
+    fi
+
+    # Not the documented nautilus-python provider API (MenuProvider and friends):
+    # it injects into Nautilus' internal widget tree, which upstream GNOME makes
+    # no stability promise about. That is precisely why this section is optional.
+    ok "Restart Files to see the panel:  nautilus -q"
+    ok "Hooks into Nautilus internals, not the stable extension API — a GNOME"
+    ok "major bump can break it. Back out with: sudo dnf remove nautilus-my-computer"
 }
 
 # ---------------------------------------------------------------------------

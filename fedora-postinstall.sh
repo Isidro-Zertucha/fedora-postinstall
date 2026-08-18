@@ -6,7 +6,8 @@
 #   base     dnf tuning, update, RPM Fusion, firmware (LVFS), boot tweak, update-all
 #   codecs   full ffmpeg, GStreamer, per-GPU hardware video acceleration
 #   nvidia   proprietary driver + CUDA/NVENC + Secure Boot signing (auto-detected)
-#   flatpak  Flathub (unfiltered) + Flatseal + Extension Manager
+#   flatpak  Flathub (unfiltered) + Flatseal + Warehouse + Gear Lever
+#            + Extension Manager (GNOME)
 #   gaming   Steam, steam-devices, gamescope, MangoHud, GOverlay, vkBasalt,
 #            GameMode, protontricks, ProtonPlus, vm.max_map_count tweak
 #   snapper  Btrfs snapshots + Btrfs Assistant GUI
@@ -21,7 +22,9 @@
 #   battery     charge threshold (default 80%) — vendor-neutral, detected at
 #               runtime from the power_supply sysfs class, so Lenovo/ASUS/
 #               ThinkPad/Huawei/Framework are all the same code path
-#   distrobox   containerized dev environments (Podman-backed)
+#   peripherals Solaar (Logitech), OpenRGB, input-remapper — all from Fedora's
+#               own repos, no COPR and no out-of-tree kernel modules
+#   distrobox   containerized dev environments (Podman-backed) + DistroShelf GUI
 #   wine        Wine + winetricks (non-Steam Windows software)
 #   lutris      Lutris game launcher (Epic/GOG/emulators/install scripts)
 #   heroic      Heroic Games Launcher — GOG/Epic/Amazon libraries (Flatpak)
@@ -75,7 +78,7 @@ set -uo pipefail
 LOG_FILE="/var/log/fedora-postinstall.log"
 REPO_RAW="https://raw.githubusercontent.com/Isidro-Zertucha/fedora-postinstall/main/fedora-postinstall.sh"
 DEFAULT_SECTIONS=(base codecs nvidia flatpak gaming snapper media dev virt qol)
-OPTIONAL_SECTIONS=(legion asus battery distrobox wine lutris heroic faugus gametweaks creative apps mycomputer)
+OPTIONAL_SECTIONS=(legion asus battery peripherals distrobox wine lutris heroic faugus gametweaks creative apps mycomputer)
 FORCE_NVIDIA=""          # "", "yes", "no"
 ONLY_SECTIONS=""
 SKIP_SECTIONS=""
@@ -325,7 +328,7 @@ declare -A SECTION_DESC=(
     [base]="dnf tuning, update, RPM Fusion, firmware, boot tweak"
     [codecs]="full ffmpeg, GStreamer, hardware video acceleration"
     [nvidia]="proprietary driver + CUDA/NVENC (auto-skips if no NVIDIA)"
-    [flatpak]="Flathub + Flatseal (+ Extension Manager on GNOME)"
+    [flatpak]="Flathub + Flatseal + Warehouse + Gear Lever (+ Ext Manager on GNOME)"
     [gaming]="Steam, gamescope, MangoHud, GameMode, ProtonPlus"
     [snapper]="Btrfs snapshots + Btrfs Assistant GUI"
     [media]="OBS Studio + virtual camera, mpv, yt-dlp"
@@ -335,7 +338,8 @@ declare -A SECTION_DESC=(
     [legion]="Lenovo Legion power modes (native kernel check)"
     [asus]="asusctl + supergfxctl (ASUS laptops)"
     [battery]="charge cap at 80% — any vendor, persists reboot/resume"
-    [distrobox]="containerized dev environments (Podman)"
+    [peripherals]="Solaar (Logitech), OpenRGB, input-remapper"
+    [distrobox]="containerized dev environments (Podman) + DistroShelf GUI"
     [wine]="Wine + winetricks (non-Steam Windows software)"
     [lutris]="launcher for Epic/GOG/emulators/install scripts"
     [heroic]="GOG/Epic/Amazon library launcher (Flathub)"
@@ -626,6 +630,21 @@ section_flatpak() {
 
     step "Flatseal (Flatpak permission manager)" \
         flatpak install -y --noninteractive flathub com.github.tchx84.Flatseal
+
+    # Warehouse complements Flatseal rather than duplicating it: Flatseal edits
+    # permissions, Warehouse handles the rest of the lifecycle — downgrading to
+    # a previous commit when an update breaks an app, pinning runtimes, masking
+    # updates, and wiping leftover user data. Rolling back is the reason it is
+    # here; doing it by hand means hunting commit hashes for 'flatpak update
+    # --commit='.
+    step "Warehouse (Flatpak lifecycle: rollback, runtimes, user data)" \
+        flatpak install -y --noninteractive flathub io.github.flattool.Warehouse
+
+    # AppImages arrive as loose executables with no desktop entry, no icon and
+    # no update path. Gear Lever integrates them into the menu and updates them
+    # in place, which is the only thing that makes them tolerable long-term.
+    step "Gear Lever (AppImage integration & updates)" \
+        flatpak install -y --noninteractive flathub it.mijorus.gearlever
 
     if has_gnome; then
         step "Extension Manager (GNOME extensions)" \
@@ -1351,8 +1370,37 @@ section_distrobox() {
     header "DISTROBOX — containerized dev environments (Podman-backed)"
 
     step "Install distrobox" dnf -y install distrobox
+
+    # DistroShelf over BoxBuddy: it covers container status, package install,
+    # fine-grained export management and cloning, and it already shipped
+    # Distrobox v2 compatibility. Both are GTK4/libadwaita and both are on
+    # Flathub, so the deciding factor is scope and upkeep, not stack.
+    step "Flatpak + Flathub" ensure_flatpak
+    step "DistroShelf (Distrobox GUI)" \
+        flatpak install -y --noninteractive flathub com.ranfdev.DistroShelf
+
     ok "Create an env:  distrobox create -n ubuntu-lts -i ubuntu:24.04"
     ok "Enter it:       distrobox enter ubuntu-lts"
+}
+
+section_peripherals() {
+    header "PERIPHERALS — Logitech, RGB lighting, input remapping"
+
+    # Every package here comes from Fedora's own signed repos: no COPR, no
+    # out-of-tree kernel module, nothing to rebuild when the kernel bumps.
+    # That is precisely why these three made the cut and OpenRazer (DKMS) and
+    # xone (interactive lpf firmware) did not.
+    step "Install peripheral tooling" dnf -y install \
+        solaar input-remapper openrgb
+
+    # input-remapper is split GUI/daemon: the GUI only writes presets, the
+    # service is what actually applies them. Skip this and the mappings exist
+    # on disk but nothing remaps.
+    step_soft "Enable input-remapper daemon" \
+        systemctl enable --now input-remapper.service
+
+    ok "Solaar: Logitech Unifying/Bolt/USB/Bluetooth — battery, pairing, per-device settings"
+    ok "OpenRGB: motherboard and RAM controllers may also need 'modprobe i2c-dev'"
 }
 
 section_wine() {

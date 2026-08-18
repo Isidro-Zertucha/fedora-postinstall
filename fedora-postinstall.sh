@@ -247,6 +247,18 @@ set_dnf_opt() {
     fi
 }
 
+# Compare two RPM version strings: true when $1 >= $2.
+#
+# sort -V is the whole point. Plain string comparison puts 0.9.7 above 0.10.1,
+# which is backwards and is exactly the case that matters in practice — an
+# upstream fix lands in x.10.x while a COPR is still serving x.9.x. Using
+# coreutils keeps this dependency-free; rpmdev-vercmp would mean pulling in
+# rpmdevtools just to answer one question.
+version_ge() {
+    [[ "$1" == "$2" ]] && return 0
+    [[ "$(printf '%s\n%s\n' "$1" "$2" | sort -V | head -n1)" == "$2" ]]
+}
+
 # Enable a COPR only if it actually serves the packages we want on THIS Fedora
 # release. When Fedora branches, COPR auto-forks a project's existing binaries
 # into the new chroot, so a repo can look alive while shipping packages nobody
@@ -258,22 +270,46 @@ set_dnf_opt() {
 # COPR package names are case-sensitive, and asking for the wrong case looks
 # exactly like an empty repository.
 #
+# Each argument is a package name, optionally with a minimum version:
+#
+#   copr_enable_guarded owner/project pkg-a 'pkg-b>=1.2.3'
+#
+# Presence alone is not proof a COPR is usable. A repo can carry the right
+# package name at a version that predates the fix you need — it builds for the
+# current Fedora, passes a name check, and still installs something broken. The
+# '>=' form closes that hole; bare names keep the original behaviour.
+#
 # On success the repo stays enabled with skip_if_unavailable, so a future
 # missing chroot degrades to a warning instead of wedging every dnf run. On
 # failure the repo is disabled again, leaving the system as we found it.
 copr_enable_guarded() {
     local copr="$1"; shift
     local repo="copr:copr.fedorainfracloud.org:${copr%%/*}:${copr##*/}"
-    local pkg
+    local spec pkg min have
 
     if ! dnf copr enable -y "$copr" >>"$LOG_FILE" 2>&1; then
         warn "COPR could not be enabled: $copr"
         return 1
     fi
 
-    for pkg in "$@"; do
-        if [[ -z "$(dnf -q repoquery --repo="$repo" "$pkg" 2>/dev/null)" ]]; then
+    for spec in "$@"; do
+        pkg="${spec%%>=*}"
+        min=""
+        [[ "$spec" == *">="* ]] && min="${spec#*>=}"
+
+        # Highest version the repo offers: a chroot can carry several builds,
+        # and dnf would install the newest, so that is what we must judge.
+        have=$(dnf -q repoquery --repo="$repo" --qf '%{VERSION}\n' "$pkg" 2>/dev/null |
+               sort -V | tail -n1)
+
+        if [[ -z "$have" ]]; then
             warn "COPR $copr serves no '$pkg' for Fedora $FEDORA_VER — disabling it again"
+            dnf copr disable -y "$copr" >>"$LOG_FILE" 2>&1 || true
+            return 1
+        fi
+
+        if [[ -n "$min" ]] && ! version_ge "$have" "$min"; then
+            warn "COPR $copr serves $pkg $have for Fedora $FEDORA_VER, need >= $min — disabling it again"
             dnf copr disable -y "$copr" >>"$LOG_FILE" 2>&1 || true
             return 1
         fi

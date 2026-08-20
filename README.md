@@ -86,6 +86,7 @@ sudo ./fedora-postinstall.sh --menu
 | `legion`     | LenovoLegionLinux — community fan/power control (falls back to source instructions if COPR is stale) |
 | `asus`       | asusctl + supergfxctl (ASUS laptops, asus-linux.org COPR) |
 | `battery`    | Charge threshold, default 80%, persisted across reboot **and** resume. Vendor-neutral: detected from the `power_supply` sysfs class, so Lenovo, ASUS, ThinkPad, Huawei and Framework are one code path. Installs the `battery-limit` tool |
+| `peripherals`| Solaar (Logitech HID++ — pairing, battery, per-device settings), Piper + `ratbagd` (gaming mice — DPI, buttons and LEDs written to the mouse's onboard memory), OpenRGB, input-remapper. All from Fedora's own repos: no COPR, no out-of-tree module. None of them is a driver — `hid-logitech-hidpp` is in-tree and already handles the device — they are configuration front-ends |
 | `distrobox`  | Containerized dev environments (Podman-backed) |
 | `wine`       | Wine + winetricks for non-Steam Windows software |
 | `lutris`     | Lutris launcher (Epic / GOG / emulators / community install scripts) |

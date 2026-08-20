@@ -22,8 +22,9 @@
 #   battery     charge threshold (default 80%) — vendor-neutral, detected at
 #               runtime from the power_supply sysfs class, so Lenovo/ASUS/
 #               ThinkPad/Huawei/Framework are all the same code path
-#   peripherals Solaar (Logitech), OpenRGB, input-remapper — all from Fedora's
-#               own repos, no COPR and no out-of-tree kernel modules
+#   peripherals Solaar (Logitech), Piper (gaming mice), OpenRGB, input-remapper
+#               — all from Fedora's own repos, no COPR and no out-of-tree
+#               kernel modules
 #   distrobox   containerized dev environments (Podman-backed) + DistroShelf GUI
 #   wine        Wine + winetricks (non-Steam Windows software)
 #   lutris      Lutris game launcher (Epic/GOG/emulators/install scripts)
@@ -374,7 +375,7 @@ declare -A SECTION_DESC=(
     [legion]="Lenovo Legion power modes (native kernel check)"
     [asus]="asusctl + supergfxctl (ASUS laptops)"
     [battery]="charge cap at 80% — any vendor, persists reboot/resume"
-    [peripherals]="Solaar (Logitech), OpenRGB, input-remapper"
+    [peripherals]="Solaar (Logitech), Piper (gaming mice), OpenRGB, input-remapper"
     [distrobox]="containerized dev environments (Podman) + DistroShelf GUI"
     [wine]="Wine + winetricks (non-Steam Windows software)"
     [lutris]="launcher for Epic/GOG/emulators/install scripts"
@@ -1420,14 +1421,18 @@ section_distrobox() {
 }
 
 section_peripherals() {
-    header "PERIPHERALS — Logitech, RGB lighting, input remapping"
+    header "PERIPHERALS — Logitech, gaming mice, RGB lighting, input remapping"
 
     # Every package here comes from Fedora's own signed repos: no COPR, no
     # out-of-tree kernel module, nothing to rebuild when the kernel bumps.
-    # That is precisely why these three made the cut and OpenRazer (DKMS) and
+    # That is precisely why these made the cut and OpenRazer (DKMS) and
     # xone (interactive lpf firmware) did not.
+    #
+    # Solaar and Piper do not overlap: Solaar drives HID++ office devices
+    # (MX/Ergo/Unifying), Piper drives gaming mice through ratbagd. Neither
+    # is a driver — hid-logitech-hidpp is in-tree and already does that.
     step "Install peripheral tooling" dnf -y install \
-        solaar input-remapper openrgb
+        solaar piper libratbag-ratbagd input-remapper openrgb
 
     # input-remapper is split GUI/daemon: the GUI only writes presets, the
     # service is what actually applies them. Skip this and the mappings exist
@@ -1435,7 +1440,14 @@ section_peripherals() {
     step_soft "Enable input-remapper daemon" \
         systemctl enable --now input-remapper.service
 
+    # ratbagd is the opposite case and needs no line here: its unit is
+    # Type=dbus/BusName=org.freedesktop.ratbag1 with no WantedBy, so D-Bus
+    # activates it the moment Piper asks for it.
+
     ok "Solaar: Logitech Unifying/Bolt/USB/Bluetooth — battery, pairing, per-device settings"
+    ok "Piper: gaming mice (Logitech G, ASUS ROG, SteelSeries, Roccat) — DPI, buttons, LEDs"
+    ok "Piper's GUI can expose fewer buttons than the mouse has — 'ratbagctl' reaches all of them"
+    ok "Wireless mice are often configurable only while cabled; settings persist in onboard memory"
     ok "OpenRGB: motherboard and RAM controllers may also need 'modprobe i2c-dev'"
 }
 

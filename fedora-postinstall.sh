@@ -14,7 +14,8 @@
 #   media    OBS Studio + virtual camera (v4l2loopback), mpv, yt-dlp
 #   dev      git/tooling, Docker CE, nvm (Node), uv (Python), VS Code
 #   virt     KVM/QEMU + virt-manager
-#   qol      archives, fonts (incl. MS core fonts), monitors, tldr, desktop extras
+#   qol      archives, fonts (incl. MS core fonts), monitors (htop/btop/Mission
+#            Center), tldr, desktop extras
 #
 # Optional sections (only with --with):
 #   legion      Lenovo Legion power modes (verifies native kernel support first)
@@ -31,8 +32,12 @@
 #   heroic      Heroic Games Launcher — GOG/Epic/Amazon libraries (Flatpak)
 #   faugus      Faugus Launcher — minimal UMU/Proton launcher for Windows games
 #   gametweaks  scx_lavd scheduler as a TOGGLE (stock kernel), split_lock_detect=off
-#   creative    GIMP, Inkscape, Kdenlive, Audacity, Blender — Flatpaks
-#   apps        Discord (Vesktop), Spotify, Telegram — Flatpaks
+#   creative    GIMP, Inkscape, Kdenlive, Audacity, Blender, draw.io — Flatpaks
+#   apps        Discord (Vesktop), ZapZap (WhatsApp), Telegram, Spotify,
+#               Foliate (e-book reader)
+#   onlyoffice  ONLYOFFICE Desktop Editors — OOXML-native office suite (Flathub)
+#   collabora   Collabora Office — LibreOffice-derived office suite (Flathub)
+#               Pick ONE of the two: both sit next to Fedora's own LibreOffice.
 #   mycomputer  "My Computer" drives/volumes panel for GNOME Files (Nautilus
 #               extension, upstream COPR — needs Fedora 43+ and Nautilus)
 #
@@ -79,7 +84,7 @@ set -uo pipefail
 LOG_FILE="/var/log/fedora-postinstall.log"
 REPO_RAW="https://raw.githubusercontent.com/Isidro-Zertucha/fedora-postinstall/main/fedora-postinstall.sh"
 DEFAULT_SECTIONS=(base codecs nvidia flatpak gaming snapper media dev virt qol)
-OPTIONAL_SECTIONS=(legion asus battery peripherals distrobox wine lutris heroic faugus gametweaks creative apps mycomputer)
+OPTIONAL_SECTIONS=(legion asus battery peripherals distrobox wine lutris heroic faugus gametweaks creative apps onlyoffice collabora mycomputer)
 FORCE_NVIDIA=""          # "", "yes", "no"
 ONLY_SECTIONS=""
 SKIP_SECTIONS=""
@@ -371,7 +376,7 @@ declare -A SECTION_DESC=(
     [media]="OBS Studio + virtual camera, mpv, yt-dlp"
     [dev]="git tooling, Docker CE, nvm, uv, VS Code"
     [virt]="KVM/QEMU + virt-manager"
-    [qol]="fonts, archives, monitors, desktop-matched extras"
+    [qol]="fonts, archives, monitors (+ Mission Center), desktop extras"
     [legion]="Lenovo Legion power modes (native kernel check)"
     [asus]="asusctl + supergfxctl (ASUS laptops)"
     [battery]="charge cap at 80% — any vendor, persists reboot/resume"
@@ -382,8 +387,10 @@ declare -A SECTION_DESC=(
     [heroic]="GOG/Epic/Amazon library launcher (Flathub)"
     [faugus]="minimal UMU/Proton launcher for Windows games"
     [gametweaks]="scx_lavd game-mode toggle, split-lock off"
-    [creative]="GIMP, Inkscape, Kdenlive, Audacity, Blender (Flathub)"
-    [apps]="Discord (Vesktop), Spotify, Telegram (Flatpaks)"
+    [creative]="GIMP, Inkscape, Kdenlive, Audacity, Blender, draw.io"
+    [apps]="Vesktop, ZapZap, Telegram, Spotify, Foliate"
+    [onlyoffice]="ONLYOFFICE — OOXML-native suite (pick one office suite)"
+    [collabora]="Collabora Office — LibreOffice-derived (pick one office suite)"
     [mycomputer]="'My Computer' drives panel for GNOME Files (Nautilus)"
 )
 
@@ -960,6 +967,18 @@ section_qol() {
 
     step "Utilities" dnf -y install \
         htop btop fastfetch wl-clipboard tldr
+
+    # The graphical half of the line above, and not a duplicate of it: htop and
+    # btop cannot see the GPU at all. Mission Center reads NVIDIA, AMD and Intel
+    # alike and attributes utilisation, VRAM and encoder load to individual
+    # processes — the one question that actually comes up on a machine running
+    # the nvidia/gaming/media sections above.
+    #
+    # Flathub because there is no Fedora package: upstream ships Flatpak and Snap
+    # only, and the COPRs that exist are one-off rebuilds of tagged releases.
+    step "Flatpak + Flathub" ensure_flatpak
+    step "Mission Center (graphical system monitor, per-process GPU)" \
+        flatpak install -y --noninteractive flathub io.missioncenter.MissionCenter
 
     step_soft "Fonts" dnf -y install \
         google-noto-emoji-fonts google-noto-sans-fonts jetbrains-mono-fonts \
@@ -1589,9 +1608,9 @@ section_faugus() {
 }
 
 section_creative() {
-    header "CREATIVE — image/video/audio/3D suite (Flathub)"
+    header "CREATIVE — image/video/audio/3D/diagrams (Flathub)"
 
-    # Flatpak wins outright here, so Flatpak it is. All five are published on
+    # Flatpak wins outright here, so Flatpak it is. All of them are published on
     # Flathub by their own upstreams and track releases immediately, while
     # Fedora's builds trail — Blender and Kdenlive worst of all. And none of
     # them needs host integration: they are self-contained desktop apps, so the
@@ -1612,18 +1631,110 @@ section_creative() {
         flatpak install -y --noninteractive flathub org.audacityteam.Audacity
     step "Blender" \
         flatpak install -y --noninteractive flathub org.blender.Blender
+
+    # draw.io Desktop is the same editor as the web app with the network side
+    # cut out: no account, no upload, files stay local as .drawio (plain XML,
+    # diffable in git). That is the reason it belongs in an offline install and
+    # the reason it is worth a whole app next to Inkscape — Inkscape draws
+    # shapes, draw.io draws MODELS, with connectors that stay attached when the
+    # boxes move. Flathub is upstream's own Electron build.
+    step "draw.io (diagrams: flowcharts, UML, ERD, network)" \
+        flatpak install -y --noninteractive flathub com.jgraph.drawio.desktop
 }
 
 section_apps() {
-    header "APPS — communication & music (Flatpaks)"
+    header "APPS — communication, reading & music"
 
     step "Flatpak + Flathub" ensure_flatpak
     step "Vesktop (Discord with proper Wayland screenshare)" \
         flatpak install -y --noninteractive flathub dev.vencord.Vesktop
-    step "Spotify" \
-        flatpak install -y --noninteractive flathub com.spotify.Client
     step "Telegram" \
         flatpak install -y --noninteractive flathub org.telegram.desktop
+
+    # WhatsApp publishes no Linux client and no API a native one could use, so
+    # every option here wraps WhatsApp Web. ZapZap is the wrapper worth having:
+    # a real window with tray icon, native notifications, spellcheck and
+    # multi-account. Flathub is upstream's own channel — there is no Fedora
+    # package, and the alternatives are unofficial Electron rebuilds.
+    step "ZapZap (WhatsApp desktop client)" \
+        flatpak install -y --noninteractive flathub com.rtosta.zapzap
+
+    step "Spotify" \
+        flatpak install -y --noninteractive flathub com.spotify.Client
+
+    # The one native entry in this section, deliberately. Fedora packages
+    # Foliate from the same upstream tags Flathub publishes, so the Flatpak buys
+    # no freshness here — it only adds a second WebKitGTK and a second runtime to
+    # keep patched. Native also lets it read books straight off any mounted
+    # drive, which is the whole job of an e-book reader and the first thing the
+    # sandbox gets in the way of.
+    step "Foliate (EPUB/MOBI/FB2/CBZ e-book reader)" dnf -y install foliate
+}
+
+# Both office sections exist because the choice is genuinely a fork, not a
+# preference — and both are OPTIONAL because Fedora Workstation already ships
+# LibreOffice. A third suite has to earn its disk space.
+#
+#   onlyoffice  OOXML is its NATIVE format. .docx/.xlsx/.pptx are read and
+#               written directly instead of being converted into ODF on open and
+#               back out on save, and that round-trip is where LibreOffice loses
+#               tracked changes, form fields and pivot-table layout in files that
+#               came from Microsoft Office. Ribbon UI, so it is also the shortest
+#               retraining path off Office 365.
+#
+#   collabora   Collabora Office Desktop is LibreOffice core with Collabora's
+#               shell, QA and backports on top. That makes it excellent at ODF
+#               and at legacy formats — and largely redundant next to the
+#               LibreOffice Fedora already installed, which is the honest reason
+#               it is not the default recommendation here.
+#
+# Neither is installed from its vendor RPM repository, and that is deliberate.
+# Both vendors publish one channel with no per-Fedora chroots, so the repo keeps
+# resolving after Fedora branches and then stops the next `dnf system-upgrade`
+# dead — exactly the failure the THIRD-PARTY REPOSITORIES summary at the end of
+# this script exists to warn about. The Flathub builds are published by the same
+# upstreams and update with everything else via `update-all`.
+
+# Two full office suites is ~2 GB and two competing sets of file associations,
+# which is a mess that shows up weeks later when the wrong app opens a .docx.
+warn_office_overlap() {
+    local other_id="$1" other_name="$2"
+    if flatpak info "$other_id" >/dev/null 2>&1; then
+        warn "$other_name is already installed — two full office suites means ~2 GB"
+        warn "and two apps fighting over the .docx/.xlsx file associations. Keep one."
+    fi
+    if rpm -q libreoffice-core >/dev/null 2>&1; then
+        warn "Fedora's LibreOffice is installed too. Set the default per file type in"
+        warn "Settings > Apps (GNOME) or System Settings > File Associations (KDE)."
+    fi
+}
+
+section_onlyoffice() {
+    header "ONLYOFFICE — OOXML-native office suite (Flathub)"
+
+    warn_office_overlap com.collaboraoffice.Office "Collabora Office"
+
+    step "Flatpak + Flathub" ensure_flatpak
+    step "ONLYOFFICE Desktop Editors" \
+        flatpak install -y --noninteractive flathub org.onlyoffice.desktopeditors
+
+    ok "Native OOXML engine — the suite to reach for when a .docx has to come back"
+    ok "out looking the way it went in. Also edits PDFs and diagrams."
+    ok "Works fully offline; the cloud/collaboration side is opt-in, not required."
+}
+
+section_collabora() {
+    header "COLLABORA OFFICE — LibreOffice-derived office suite (Flathub)"
+
+    warn_office_overlap org.onlyoffice.desktopeditors "ONLYOFFICE"
+
+    step "Flatpak + Flathub" ensure_flatpak
+    step "Collabora Office" \
+        flatpak install -y --noninteractive flathub com.collaboraoffice.Office
+
+    ok "LibreOffice core, so ODF and the long tail of legacy formats are its strength"
+    warn "This is Collabora Office Desktop, the suite launched in Nov 2025. Collabora"
+    warn "still point corporate/LTS deployments at Collabora Office Classic instead."
 }
 
 section_mycomputer() {

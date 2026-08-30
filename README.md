@@ -71,13 +71,13 @@ sudo ./fedora-postinstall.sh --menu
 | `base`    | dnf tuning (auto-probed parallel downloads), full update, RPM Fusion (free + nonfree + tainted), firmware updates via LVFS, faster boot, an `update-all` helper |
 | `codecs`  | Full `ffmpeg`, GStreamer plugins, and per-GPU hardware video acceleration (AMD / Intel / NVIDIA) |
 | `nvidia`  | Proprietary driver (akmod) + CUDA/NVENC, **driver branch matched to the GPU** (legacy `580xx`/`470xx`/`390xx` for pre-Turing cards), **open kernel modules** (needed for RTX 50-series), and **Secure Boot module signing** (MOK enrollment) — *auto-detected* |
-| `flatpak` | Flathub (unfiltered) + Flatseal, plus Extension Manager on GNOME |
+| `flatpak` | Flathub (unfiltered) + Flatseal, Warehouse (rollback, runtimes, leftover user data) and Gear Lever (AppImage integration), plus Extension Manager on GNOME |
 | `gaming`  | Steam, `steam-devices`, gamescope, MangoHud, GOverlay, vkBasalt, GameMode, protontricks, ProtonPlus, `vm.max_map_count` tweak |
 | `snapper` | Btrfs snapshots + dnf integration + Btrfs Assistant GUI (skipped if root isn't Btrfs) |
 | `media`   | OBS Studio + virtual camera (`v4l2loopback`), mpv, yt-dlp |
 | `dev`     | git/gh/build tools, Docker CE, nvm (Node LTS), uv (Python), VS Code |
 | `virt`    | KVM/QEMU + virt-manager |
-| `qol`     | Archive formats, fonts, monitors (htop/btop/fastfetch), tldr, desktop-matched extras |
+| `qol`     | Archive formats, fonts, monitors (htop/btop/fastfetch + **Mission Center** for per-process GPU, VRAM and encoder load, which the terminal ones can't see), tldr, desktop-matched extras |
 
 ### Optional sections (only with `--with`)
 
@@ -87,14 +87,45 @@ sudo ./fedora-postinstall.sh --menu
 | `asus`       | asusctl + supergfxctl (ASUS laptops, asus-linux.org COPR) |
 | `battery`    | Charge threshold, default 80%, persisted across reboot **and** resume. Vendor-neutral: detected from the `power_supply` sysfs class, so Lenovo, ASUS, ThinkPad, Huawei and Framework are one code path. Installs the `battery-limit` tool |
 | `peripherals`| Solaar (Logitech HID++ — pairing, battery, per-device settings), Piper + `ratbagd` (gaming mice — DPI, buttons and LEDs written to the mouse's onboard memory), OpenRGB, input-remapper. All from Fedora's own repos: no COPR, no out-of-tree module. None of them is a driver — `hid-logitech-hidpp` is in-tree and already handles the device — they are configuration front-ends |
-| `distrobox`  | Containerized dev environments (Podman-backed) |
+| `distrobox`  | Containerized dev environments (Podman-backed) + DistroShelf GUI |
 | `wine`       | Wine + winetricks for non-Steam Windows software |
 | `lutris`     | Lutris launcher (Epic / GOG / emulators / community install scripts) |
 | `heroic`     | Heroic Games Launcher (Flathub) — GOG, Epic and Amazon libraries. GOG Galaxy still has no Linux client (announced July 2026, no release date), so this is how you get a GOG library on Fedora. Overlaps `lutris`: Heroic is store-first, Lutris is the full platform |
 | `faugus`     | Faugus Launcher — minimal UMU/Proton launcher for individual Windows games (native COPR build; built-in GE-Proton manager). Overlaps `lutris`: pick the simple per-`.exe` tool (`faugus`) or the full platform (`lutris`) |
 | `gametweaks` | `scx_lavd` scheduler as a **toggle** (stock kernel) + `split_lock_detect=off` |
-| `creative`   | GIMP, Inkscape, Kdenlive, Audacity, Blender |
-| `apps`       | Discord (Vesktop), Spotify, Telegram — Flatpaks |
+| `creative`   | GIMP, Inkscape, Kdenlive, Audacity, Blender, draw.io. All Flatpaks: every one is published on Flathub by its own upstream and tracks releases immediately, while Fedora's builds trail (Blender and Kdenlive worst of all), and none of them needs host integration. draw.io Desktop is the web editor with the network side cut out — no account, no upload, files stay local as diffable `.drawio` XML |
+| `apps`       | Discord (Vesktop, for working Wayland screenshare), ZapZap (WhatsApp — the platform has no Linux client and no API, so every option wraps WhatsApp Web; ZapZap is the one with tray icon, native notifications and multi-account), Telegram, Spotify, Foliate (e-books). Foliate is the one **native** entry: Fedora packages it from the same upstream tags Flathub does, so the Flatpak buys no freshness and only adds a second WebKitGTK — and native reads books off any mounted drive without sandbox permissions |
+| `onlyoffice` | ONLYOFFICE Desktop Editors (Flathub). See [Office suite: pick one](#office-suite-pick-one) |
+| `collabora`  | Collabora Office (Flathub). See [Office suite: pick one](#office-suite-pick-one) |
+
+### Office suite: pick one
+
+Fedora Workstation already ships **LibreOffice**, so a second suite has to earn its ~1 GB. Both
+sections are optional and **mutually redundant** — install one, not both, or two apps end up
+fighting over the `.docx`/`.xlsx` associations. Each section warns you if the other one (or
+LibreOffice) is already present.
+
+| | `onlyoffice` | `collabora` |
+|---|---|---|
+| **Engine** | OOXML is the **native** format | LibreOffice core |
+| **Strong at** | `.docx` / `.xlsx` / `.pptx` round-trips | ODF and legacy formats |
+| **UI** | Ribbon — shortest path off Office 365 | LibreOffice-derived, Collabora's shell |
+| **Also does** | PDF and diagram editing | The full LibreOffice module set |
+
+**The deciding fact:** LibreOffice converts OOXML into ODF on open and back out on save, and that
+round-trip is where tracked changes, form fields and pivot-table layout get mangled in files that
+came from Microsoft Office. ONLYOFFICE never does the conversion — that is the one thing Fedora's
+preinstalled suite cannot give you. Collabora Office Desktop *is* LibreOffice core underneath, so
+next to the LibreOffice you already have it mostly buys you Collabora's shell, QA and backports.
+
+> If you do pick `collabora`: this is **Collabora Office Desktop**, launched November 2025.
+> Collabora still point corporate/LTS deployments at *Collabora Office Classic* instead.
+
+**Neither is installed from its vendor RPM repository, deliberately.** Both vendors publish a single
+channel with no per-Fedora chroots, so the repo keeps resolving after Fedora branches and then stops
+the next `dnf system-upgrade` dead — exactly the failure the *third-party repositories* summary at
+the end of the run exists to warn about. The Flathub builds come from the same upstreams and update
+with everything else via `update-all`.
 
 ---
 

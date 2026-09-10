@@ -467,14 +467,35 @@ run_menu() {
     for s in "${DEFAULT_SECTIONS[@]}";  do checked[$s]=1; done
     for s in "${OPTIONAL_SECTIONS[@]}"; do checked[$s]=0; done
 
-    local cur=0 key seq
+local cur=0 key seq total=${#all[@]} vis top
+    # Fit the window to the terminal: keep the header/help/footer + two paging
+    # indicators on screen (min 6 rows), and never more rows than sections.
+    vis=$(tput lines 2>/dev/null || echo 24)
+    vis=$(( vis - 6 ))
+    (( vis < 6 )) && vis=6
+    (( vis > total )) && vis=$total
+
     while true; do
         clear 2>/dev/null || true
-        echo -e "${BOLD}==> Select sections${NC}  (defaults pre-checked; optionals off)"
+        echo -e "${BOLD}==> Select sections${NC}  (defaults pre-checked; optionals off — ${total} total)"
         echo -e "    \u2191/\u2193 navigate \u00b7 SPACE toggle \u00b7 'a' all \u00b7 'n' none \u00b7 'd' defaults \u00b7 ENTER install \u00b7 'q' quit\n"
-        local i=0
-        for s in "${all[@]}"; do
-            local mark=" "
+
+        # Slide a viewport around cur so the highlight always stays visible.
+        if (( total > vis )); then
+            top=$(( cur - vis / 2 ))
+            (( top < 0 )) && top=0
+            (( top + vis > total )) && top=$(( total - vis ))
+        else
+            top=0
+        fi
+
+        local i s mark
+        if (( top > 0 )); then
+            printf "    \e[2m\u22ee %d more above\u22ee\e[0m\n" "$top"
+        fi
+        for (( i = top; i < top + vis; i++ )); do
+            s="${all[$i]}"
+            mark=" "
             [[ ${checked[$s]} -eq 1 ]] && mark="x"
             if (( i == cur )); then
                 printf "${BOLD}\e[7m  %2d) [%s] %-11s %s\e[0m${NC}\n" \
@@ -483,8 +504,10 @@ run_menu() {
                 printf "  %2d) [%s] %-11s %s\n" \
                     "$((i+1))" "$mark" "$s" "${SECTION_DESC[$s]:-}"
             fi
-            ((i++))
         done
+        if (( top + vis < total )); then
+            printf "    \e[2m\u22ee %d more below\u22ee\e[0m\n" "$(( total - top - vis ))"
+        fi
         echo
 
         IFS= read -n1 -s -r key

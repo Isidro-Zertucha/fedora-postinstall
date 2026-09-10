@@ -8,14 +8,11 @@
 #   nvidia   proprietary driver + CUDA/NVENC + Secure Boot signing (auto-detected)
 #   flatpak  Flathub (unfiltered) + Flatseal + Warehouse + Gear Lever
 #            + Extension Manager (GNOME)
-#   gaming   Steam, steam-devices, gamescope, MangoHud, GOverlay, vkBasalt,
-#            GameMode, protontricks, ProtonPlus, vm.max_map_count tweak
 #   snapper  Btrfs snapshots + Btrfs Assistant GUI
 #   media    mpv (lightweight player), yt-dlp
-#   dev      git/tooling, Docker CE, nvm (Node), uv (Python), VS Code
 #   virt     KVM/QEMU + virt-manager
 #   qol      archives, fonts (incl. MS core fonts), monitors (htop/btop/Mission
-#            Center), tldr, desktop extras
+#            Center), Obsidian, tldr, desktop extras
 #
 # Optional sections (only with --with):
 #   legion      Lenovo Legion power modes (verifies native kernel support first)
@@ -27,11 +24,15 @@
 #               — all from Fedora's own repos, no COPR and no out-of-tree
 #               kernel modules
 #   distrobox   containerized dev environments (Podman-backed) + DistroShelf GUI
+#   dev         git/tooling, Docker CE, nvm (Node), uv (Python), Go, VS Code,
+#               DBeaver Community, Orca (Agent Development Environment)
 #   wine        Wine + winetricks (non-Steam Windows software)
 #   lutris      Lutris game launcher (Epic/GOG/emulators/install scripts)
 #   heroic      Heroic Games Launcher — GOG/Epic/Amazon libraries (Flatpak)
 #   faugus      Faugus Launcher — minimal UMU/Proton launcher for Windows games
 #   gametweaks  scx_lavd scheduler as a TOGGLE (stock kernel), split_lock_detect=off
+#   gaming      Steam, gamescope, MangoHud, GOverlay, vkBasalt, GameMode,
+#               protontricks, ProtonPlus, Bottles, vm.max_map_count tweak
 #   streaming   OBS Studio + virtual camera (v4l2loopback) — screen capture/streaming
 #   creative    GIMP, Inkscape, Kdenlive, Audacity, Blender, draw.io — Flatpaks
 #   communication Vesktop (Discord), Telegram, ZapZap (WhatsApp) — Flathub
@@ -378,13 +379,13 @@ declare -A SECTION_DESC=(
     [codecs]="full ffmpeg, GStreamer, hardware video acceleration"
     [nvidia]="proprietary driver + CUDA/NVENC (auto-skips if no NVIDIA)"
     [flatpak]="Flathub + Flatseal + Warehouse + Gear Lever (+ Ext Manager on GNOME)"
-    [gaming]="Steam, gamescope, MangoHud, GameMode, ProtonPlus"
+    [gaming]="Steam, gamescope, MangoHud, GameMode, ProtonPlus, Bottles"
     [snapper]="Btrfs snapshots + Btrfs Assistant GUI"
     [media]="mpv video player, yt-dlp downloads"
     [streaming]="OBS Studio + virtual camera (v4l2loopback) — screen capture/streaming"
-    [dev]="git tooling, Docker CE, nvm, uv, VS Code, Orca"
+    [dev]="git tooling, Docker CE, nvm, uv, Go, VS Code, DBeaver, Orca"
     [virt]="KVM/QEMU + virt-manager"
-    [qol]="fonts, archives, monitors (+ Mission Center), desktop extras"
+    [qol]="fonts, archives, monitors (+ Mission Center), Obsidian, desktop extras"
     [legion]="Lenovo Legion power modes (native kernel check)"
     [asus]="asusctl + supergfxctl (ASUS laptops)"
     [battery]="charge cap at 80% — any vendor, persists reboot/resume"
@@ -765,7 +766,7 @@ section_flatpak() {
 }
 
 section_gaming() {
-    header "GAMING — Steam, gamescope, MangoHud, GOverlay, vkBasalt, ProtonPlus"
+    header "GAMING — Steam, gamescope, MangoHud, GOverlay, vkBasalt, ProtonPlus, Bottles"
 
     step "Enable RPM Fusion Steam repo" bash -c \
         'dnf config-manager setopt rpmfusion-nonfree-steam.enabled=1 2>/dev/null ||
@@ -781,6 +782,9 @@ section_gaming() {
     step "Flatpak + Flathub" ensure_flatpak
     step "ProtonPlus (GE-Proton manager)" \
         flatpak install -y --noninteractive flathub com.vysp3r.ProtonPlus
+
+    step "Bottles (GUI Wine-prefix manager)" \
+        flatpak install -y --noninteractive flathub com.usebottles.bottles
 
     # SteamOS/Nobara-style: some titles exhaust the default mmap count.
     # Idempotent AND self-healing: fix the value even if the file already
@@ -864,6 +868,8 @@ section_dev() {
     step "Core dev tools" dnf -y install \
         git gh make gcc gcc-c++ zsh tmux jq ripgrep fd-find fzf
 
+    step "Go toolchain" dnf -y install golang
+
     # --- Python: uv (no direct pip usage) ----------------------------------
     step "uv (Python project/tool manager)" dnf -y install uv
 
@@ -932,6 +938,11 @@ REPO
     else
         ok "Orca already present"
     fi
+
+    # --- DBeaver Community (database IDE, Flathub) --------------------------
+    step "Flatpak + Flathub" ensure_flatpak
+    step "DBeaver Community (database IDE)" \
+        flatpak install -y --noninteractive flathub io.dbeaver.DBeaverCommunity
 }
 
 section_virt() {
@@ -1064,6 +1075,9 @@ section_qol() {
     step "Flatpak + Flathub" ensure_flatpak
     step "Mission Center (graphical system monitor, per-process GPU)" \
         flatpak install -y --noninteractive flathub io.missioncenter.MissionCenter
+
+    step "Obsidian (notes/PKM)" \
+        flatpak install -y --noninteractive flathub md.obsidian.Obsidian
 
     step_soft "Fonts" dnf -y install \
         google-noto-emoji-fonts google-noto-sans-fonts jetbrains-mono-fonts \

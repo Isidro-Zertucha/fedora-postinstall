@@ -155,13 +155,15 @@ with everything else via `update-all`.
 -h, --help             Show usage (works both locally and via curl)
 ```
 
-`--menu` opens a terminal checklist (defaults pre-checked, optionals off): type a number
-to toggle a section, `a`/`n` for all/none, `d` to reset to defaults, Enter to install, `q` to
-quit. It writes the checked set to `--only`, so it needs a real TTY — the `bash -c "$(curl …)"`
-form above keeps one, so the picker works remotely too. Only the `curl | bash` **pipe** form
-breaks it, because there stdin *is* the download stream (and without a stdin TTY the
-"no flags" path degrades to the defaults instead). Running with **no flags at all** is the
-same picker — you only need `--menu` to force it when there are other flags around.
+`--menu` opens a terminal checklist (defaults pre-checked, optionals off). The highlight
+stays **on the list**: ↑/↓ move over the sections, **SPACE** toggles the row between
+`[x]` and `[ ]`, Enter installs, `q` quits. `a`/`n` check all/none, `d` resets to
+defaults. It writes the checked set to `--only`, so it needs a real TTY — the
+`bash -c "$(curl …)"` form above keeps one, so the picker works remotely too. Only the
+`curl | bash` **pipe** form breaks it, because there stdin *is* the download stream (and
+without a stdin TTY the "no flags" path degrades to the defaults instead). Running with
+**no flags at all** is the same picker — you only need `--menu` to force it when there
+are other flags around.
 
 Everything is **idempotent** — re-running only does what's still missing, and a failed step (one bad
 repo, one missing package) is logged and skipped instead of aborting the whole run. Full log at

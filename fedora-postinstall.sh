@@ -442,7 +442,9 @@ USAGE
 }
 
 # Interactive section picker. Defaults start checked, optionals unchecked.
-# The result is written into ONLY_SECTIONS so exactly the checked set runs.
+# Navigation stays on the list: up/down arrows move the highlight, SPACE
+# toggles the row, ENTER installs. The result is written into ONLY_SECTIONS
+# so exactly the checked set runs.
 run_menu() {
     if [[ ! -t 0 ]]; then
         err "--menu needs an interactive terminal (stdin is not a TTY)"
@@ -455,35 +457,42 @@ run_menu() {
     for s in "${DEFAULT_SECTIONS[@]}";  do checked[$s]=1; done
     for s in "${OPTIONAL_SECTIONS[@]}"; do checked[$s]=0; done
 
-    local reply i tok
+    local cur=0 key seq
     while true; do
         clear 2>/dev/null || true
         echo -e "${BOLD}==> Select sections${NC}  (defaults pre-checked; optionals off)"
-        echo -e "    number = toggle | 'a' all | 'n' none | 'd' defaults | Enter = install | q = quit\n"
-        i=1
+        echo -e "    \u2191/\u2193 navigate \u00b7 SPACE toggle \u00b7 'a' all \u00b7 'n' none \u00b7 'd' defaults \u00b7 ENTER install \u00b7 'q' quit\n"
+        local i=0
         for s in "${all[@]}"; do
             local mark=" "
             [[ ${checked[$s]} -eq 1 ]] && mark="x"
-            printf "  %2d) [%s] %-11s %s\n" "$i" "$mark" "$s" "${SECTION_DESC[$s]:-}"
+            if (( i == cur )); then
+                printf "${BOLD}\e[7m  %2d) [%s] %-11s %s\e[0m${NC}\n" \
+                    "$((i+1))" "$mark" "$s" "${SECTION_DESC[$s]:-}"
+            else
+                printf "  %2d) [%s] %-11s %s\n" \
+                    "$((i+1))" "$mark" "$s" "${SECTION_DESC[$s]:-}"
+            fi
             ((i++))
         done
         echo
-        read -rp "> " reply || { echo; err "Cancelled."; exit 0; }
-        case "$reply" in
-            "")   break ;;
-            q|Q)  echo "Cancelled."; exit 0 ;;
-            a|A)  for s in "${all[@]}"; do checked[$s]=1; done ;;
-            n|N)  for s in "${all[@]}"; do checked[$s]=0; done ;;
-            d|D)  for s in "${DEFAULT_SECTIONS[@]}";  do checked[$s]=1; done
-                  for s in "${OPTIONAL_SECTIONS[@]}"; do checked[$s]=0; done ;;
-            *)    for tok in $reply; do
-                      if [[ "$tok" =~ ^[0-9]+$ ]] && (( tok >= 1 && tok <= ${#all[@]} )); then
-                          s="${all[$((tok-1))]}"
-                          checked[$s]=$(( 1 - checked[$s] ))
-                      else
-                          warn "Ignored: '$tok'"
-                      fi
-                  done ;;
+
+        read -n1 -s -r key
+        case "$key" in
+            $'\e')                       # arrow keys arrive as ESC [ A / ESC O A
+                read -n2 -s -r -t 0.05 seq || true
+                case "$seq" in
+                    '[A'|'OA') (( cur > 0 ))              && ((cur--)) ;;
+                    '[B'|'OB') (( cur < ${#all[@]} - 1 )) && ((cur++)) ;;
+                esac
+                ;;
+            ' ') checked["${all[$cur]}"]=$(( 1 - checked["${all[$cur]}"] )) ;;
+            ''|$'\n'|$'\r') break ;;
+            a|A) for s in "${all[@]}"; do checked[$s]=1; done ;;
+            n|N) for s in "${all[@]}"; do checked[$s]=0; done ;;
+            d|D) for s in "${DEFAULT_SECTIONS[@]}";  do checked[$s]=1; done
+                 for s in "${OPTIONAL_SECTIONS[@]}"; do checked[$s]=0; done ;;
+            q|Q) echo; err "Cancelled."; exit 0 ;;
         esac
     done
 

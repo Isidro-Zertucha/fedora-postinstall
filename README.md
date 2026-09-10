@@ -81,10 +81,8 @@ sudo ./fedora-postinstall.sh --menu
 | `codecs`  | Full `ffmpeg`, GStreamer plugins, and per-GPU hardware video acceleration (AMD / Intel / NVIDIA) |
 | `nvidia`  | Proprietary driver (akmod) + CUDA/NVENC, **driver branch matched to the GPU** (legacy `580xx`/`470xx`/`390xx` for pre-Turing cards), **open kernel modules** (needed for RTX 50-series), and **Secure Boot module signing** (MOK enrollment) — *auto-detected* |
 | `flatpak` | Flathub (unfiltered) + Flatseal, Warehouse (rollback, runtimes, leftover user data) and Gear Lever (AppImage integration), plus Extension Manager on GNOME |
-| `gaming`  | Steam, `steam-devices`, gamescope, MangoHud, GOverlay, vkBasalt, GameMode, protontricks, ProtonPlus, `vm.max_map_count` tweak |
 | `snapper` | Btrfs snapshots + dnf integration + Btrfs Assistant GUI (skipped if root isn't Btrfs) |
 | `media`   | mpv + yt-dlp (the player and the downloader everyone appreciates) |
-| `dev`     | git/gh/build tools, Docker CE, nvm (Node LTS), uv (Python), VS Code |
 | `virt`    | KVM/QEMU + virt-manager |
 | `qol`     | Archive formats, fonts, monitors (htop/btop/fastfetch + **Mission Center** for per-process GPU, VRAM and encoder load, which the terminal ones can't see), tldr, desktop-matched extras |
 
@@ -97,14 +95,20 @@ sudo ./fedora-postinstall.sh --menu
 | `battery`    | Charge threshold, default 80%, persisted across reboot **and** resume. Vendor-neutral: detected from the `power_supply` sysfs class, so Lenovo, ASUS, ThinkPad, Huawei and Framework are one code path. Installs the `battery-limit` tool |
 | `peripherals`| Solaar (Logitech HID++ — pairing, battery, per-device settings), Piper + `ratbagd` (gaming mice — DPI, buttons and LEDs written to the mouse's onboard memory), OpenRGB, input-remapper. All from Fedora's own repos: no COPR, no out-of-tree module. None of them is a driver — `hid-logitech-hidpp` is in-tree and already handles the device — they are configuration front-ends |
 | `distrobox`  | Containerized dev environments (Podman-backed) + DistroShelf GUI |
+| `dev`        | git/gh/build tools, Docker CE, nvm (Node LTS), uv (Python), VS Code, and **Orca** (Stably's Agent Development Environment — run coding agents in parallel worktrees; its Linux CLI is `orca-ide`, so it never collides with the GNOME screen reader at `/usr/bin/orca`). Orca is installed from the latest `.rpm` on GitHub Releases — no vendor repository |
 | `wine`       | Wine + winetricks for non-Steam Windows software |
 | `lutris`     | Lutris launcher (Epic / GOG / emulators / community install scripts) |
 | `heroic`     | Heroic Games Launcher (Flathub) — GOG, Epic and Amazon libraries. GOG Galaxy still has no Linux client (announced July 2026, no release date), so this is how you get a GOG library on Fedora. Overlaps `lutris`: Heroic is store-first, Lutris is the full platform |
 | `faugus`     | Faugus Launcher — minimal UMU/Proton launcher for individual Windows games (native COPR build; built-in GE-Proton manager). Overlaps `lutris`: pick the simple per-`.exe` tool (`faugus`) or the full platform (`lutris`) |
 | `gametweaks` | `scx_lavd` scheduler as a **toggle** (stock kernel) + `split_lock_detect=off` |
+| `gaming`     | Steam, `steam-devices`, gamescope, MangoHud, GOverlay, vkBasalt, GameMode, protontricks, ProtonPlus, `vm.max_map_count` tweak |
 | `streaming` | OBS Studio + virtual camera (`v4l2loopback`) — screen capture and streaming. Split out of `media` on purpose: OBS is a niche tool and drags a kernel module with it, so it belongs behind an opt-in, while mpv/yt-dlp stay in the defaults |
 | `creative`   | GIMP, Inkscape, Kdenlive, Audacity, Blender, draw.io. All Flatpaks: every one is published on Flathub by its own upstream and tracks releases immediately, while Fedora's builds trail (Blender and Kdenlive worst of all), and none of them needs host integration. draw.io Desktop is the web editor with the network side cut out — no account, no upload, files stay local as diffable `.drawio` XML |
-| `apps`       | Discord (Vesktop, for working Wayland screenshare), ZapZap (WhatsApp — the platform has no Linux client and no API, so every option wraps WhatsApp Web; ZapZap is the one with tray icon, native notifications and multi-account), Telegram, Spotify, Foliate (e-books). Foliate is the one **native** entry: Fedora packages it from the same upstream tags Flathub does, so the Flatpak buys no freshness and only adds a second WebKitGTK — and native reads books off any mounted drive without sandbox permissions |
+| `communication` | Vesktop (Discord, with working Wayland screenshare), Telegram, ZapZap (WhatsApp — the platform has no Linux client and no API, so every option wraps WhatsApp Web; ZapZap is the one with tray icon, native notifications and multi-account). All Flathub |
+| `music`      | Spotify (Flathub) |
+| `reading`    | Foliate e-book reader — EPUB/MOBI/FB2/CBZ, dark mode, notes. The one **native** entry among the app sections: Fedora packages it from the same upstream tags Flathub does, so the Flatpak buys no freshness and only adds a second WebKitGTK — and native reads books off any mounted drive without sandbox permissions |
+| `browser`    | Brave (Chromium-based, Flathub build from Brave itself). Fedora's default browser stays Firefox; this section only installs an alternative. **No vendor RPM repo, deliberately** — Brave ships one channel with no per-Fedora chroots, the same upgrade risk that keeps ONLYOFFICE/Collabora off their vendor repos |
+| `filesharing`| LocalSend (AirDrop-style device-to-device transfer over the LAN, no account — Flathub), FreeFileSync + RealTimeSync (comparison-first sync, Flathub), and Syncthing (continuous, private sync across your own devices — from Fedora's own repos, enabled per-user at boot, web UI at `localhost:8384`) |
 | `onlyoffice` | ONLYOFFICE Desktop Editors (Flathub). See [Office suite: pick one](#office-suite-pick-one) |
 | `collabora`  | Collabora Office (Flathub). See [Office suite: pick one](#office-suite-pick-one) |
 

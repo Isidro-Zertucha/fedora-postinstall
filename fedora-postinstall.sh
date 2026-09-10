@@ -34,8 +34,13 @@
 #   gametweaks  scx_lavd scheduler as a TOGGLE (stock kernel), split_lock_detect=off
 #   streaming   OBS Studio + virtual camera (v4l2loopback) — screen capture/streaming
 #   creative    GIMP, Inkscape, Kdenlive, Audacity, Blender, draw.io — Flatpaks
-#   apps        Discord (Vesktop), ZapZap (WhatsApp), Telegram, Spotify,
-#               Foliate (e-book reader)
+#   communication Vesktop (Discord), Telegram, ZapZap (WhatsApp) — Flathub
+#   music         Spotify — Flathub
+#   reading       Foliate e-book reader — native dnf
+#   browser       Brave — Flathub (Brave's own build; their vendor RPM repo
+#                 would risk the next dnf system-upgrade)
+#   filesharing   LocalSend + FreeFileSync (Flathub), Syncthing (Fedora native
+#                 + per-user systemd service)
 #   onlyoffice  ONLYOFFICE Desktop Editors — OOXML-native office suite (Flathub)
 #   collabora   Collabora Office — LibreOffice-derived office suite (Flathub)
 #               Pick ONE of the two: both sit next to Fedora's own LibreOffice.
@@ -84,8 +89,8 @@ set -uo pipefail
 # ---------------------------------------------------------------------------
 LOG_FILE="/var/log/fedora-postinstall.log"
 REPO_RAW="https://raw.githubusercontent.com/Isidro-Zertucha/fedora-postinstall/main/fedora-postinstall.sh"
-DEFAULT_SECTIONS=(base codecs nvidia flatpak gaming snapper media dev virt qol)
-OPTIONAL_SECTIONS=(legion asus battery peripherals distrobox wine lutris heroic faugus gametweaks streaming creative apps onlyoffice collabora mycomputer)
+DEFAULT_SECTIONS=(base codecs nvidia flatpak snapper media virt qol)
+OPTIONAL_SECTIONS=(legion asus battery peripherals distrobox dev wine lutris heroic faugus gametweaks gaming streaming creative communication music reading browser filesharing onlyoffice collabora mycomputer)
 FORCE_NVIDIA=""          # "", "yes", "no"
 ONLY_SECTIONS=""
 SKIP_SECTIONS=""
@@ -328,9 +333,10 @@ copr_enable_guarded() {
     return 0
 }
 
-# Every Flatpak-installing section can be run on its own (--only apps, --only
-# creative), so none of them may assume the 'flatpak' section went first. Both
-# halves are idempotent and cost nothing when they are already satisfied.
+# Every Flatpak-installing section can be run on its own (--only communication,
+# --only filesharing, --only creative), so none of them may assume the 'flatpak'
+# section went first. Both halves are idempotent and cost nothing when they are
+# already satisfied.
 ensure_flatpak() {
     command -v flatpak >/dev/null 2>&1 || dnf -y install flatpak || return 1
     flatpak remote-add --if-not-exists flathub \
@@ -376,7 +382,7 @@ declare -A SECTION_DESC=(
     [snapper]="Btrfs snapshots + Btrfs Assistant GUI"
     [media]="mpv video player, yt-dlp downloads"
     [streaming]="OBS Studio + virtual camera (v4l2loopback) — screen capture/streaming"
-    [dev]="git tooling, Docker CE, nvm, uv, VS Code"
+    [dev]="git tooling, Docker CE, nvm, uv, VS Code, Orca"
     [virt]="KVM/QEMU + virt-manager"
     [qol]="fonts, archives, monitors (+ Mission Center), desktop extras"
     [legion]="Lenovo Legion power modes (native kernel check)"
@@ -390,7 +396,11 @@ declare -A SECTION_DESC=(
     [faugus]="minimal UMU/Proton launcher for Windows games"
     [gametweaks]="scx_lavd game-mode toggle, split-lock off"
     [creative]="GIMP, Inkscape, Kdenlive, Audacity, Blender, draw.io"
-    [apps]="Vesktop, ZapZap, Telegram, Spotify, Foliate"
+    [communication]="Vesktop (Discord), Telegram, ZapZap (WhatsApp)"
+    [music]="Spotify"
+    [reading]="Foliate e-book reader (EPUB/MOBI/FB2/CBZ)"
+    [browser]="Brave — Chromium-based browser (Flathub, official build)"
+    [filesharing]="LocalSend (LAN transfer), FreeFileSync + RealTimeSync, Syncthing"
     [onlyoffice]="ONLYOFFICE — OOXML-native suite (pick one office suite)"
     [collabora]="Collabora Office — LibreOffice-derived (pick one office suite)"
     [mycomputer]="'My Computer' drives panel for GNOME Files (Nautilus)"
@@ -820,7 +830,7 @@ section_streaming() {
 }
 
 section_dev() {
-    header "DEV — tooling, Docker CE, nvm (Node), uv (Python), VS Code"
+    header "DEV — tooling, Docker CE, nvm (Node), uv (Python), VS Code, Orca"
 
     step "Core dev tools" dnf -y install \
         git gh make gcc gcc-c++ zsh tmux jq ripgrep fd-find fzf
@@ -878,6 +888,20 @@ REPO
         step "Install VS Code" dnf -y install code
     else
         ok "VS Code already present"
+    fi
+
+    # --- Orca (Agent Development Environment) -------------------------------
+    # Desktop ADE from stablyai for running coding agents (Claude Code, Codex,
+    # Gemini, ...) in parallel worktrees. Linux ships the CLI as 'orca-ide' — a
+    # name chosen upstream so it cannot collide with the GNOME screen reader at
+    # /usr/bin/orca. Installed from a static .rpm pulled from GitHub Releases:
+    # no vendor repository, so nothing breaks the next dnf system-upgrade.
+    if ! command -v orca-ide >/dev/null 2>&1; then
+        step "Download Orca .rpm (latest release)" bash -c \
+            'url=$(curl -fsSL "https://api.github.com/repos/stablyai/orca/releases/latest" | grep -o "https://[^\"]*\.x86_64\.rpm" | head -n1); [[ -n "$url" ]] || { echo "no x86_64 .rpm asset in the latest Orca release"; exit 1; }; curl -fsSL "$url" -o /tmp/orca-ide.rpm'
+        step "Install Orca (ADE + orca-ide CLI)" dnf -y install /tmp/orca-ide.rpm
+    else
+        ok "Orca already present"
     fi
 }
 
@@ -1674,8 +1698,8 @@ section_creative() {
         flatpak install -y --noninteractive flathub com.jgraph.drawio.desktop
 }
 
-section_apps() {
-    header "APPS — communication, reading & music"
+section_communication() {
+    header "COMMUNICATION — Discord, Telegram & WhatsApp (Flathub)"
 
     step "Flatpak + Flathub" ensure_flatpak
     step "Vesktop (Discord with proper Wayland screenshare)" \
@@ -1690,17 +1714,72 @@ section_apps() {
     # package, and the alternatives are unofficial Electron rebuilds.
     step "ZapZap (WhatsApp desktop client)" \
         flatpak install -y --noninteractive flathub com.rtosta.zapzap
+}
+
+section_music() {
+    header "MUSIC — Spotify (Flathub)"
+
+    step "Flatpak + Flathub" ensure_flatpak
 
     step "Spotify" \
         flatpak install -y --noninteractive flathub com.spotify.Client
+}
 
-    # The one native entry in this section, deliberately. Fedora packages
-    # Foliate from the same upstream tags Flathub publishes, so the Flatpak buys
-    # no freshness here — it only adds a second WebKitGTK and a second runtime to
-    # keep patched. Native also lets it read books straight off any mounted
-    # drive, which is the whole job of an e-book reader and the first thing the
-    # sandbox gets in the way of.
+section_reading() {
+    header "READING — e-book reader (native)"
+
+    # Fedora packages Foliate from the same upstream tags Flathub publishes, so
+    # the Flatpak buys no freshness here — it only adds a second WebKitGTK and a
+    # second runtime to keep patched. Native also lets it read books straight
+    # off any mounted drive, which is the whole job of an e-book reader and the
+    # first thing the sandbox gets in the way of.
     step "Foliate (EPUB/MOBI/FB2/CBZ e-book reader)" dnf -y install foliate
+}
+
+section_browser() {
+    header "BROWSER — Brave (Flathub)"
+
+    step "Flatpak + Flathub" ensure_flatpak
+
+    # Brave ships its own vendor RPM repo, and a vendor repo is exactly the
+    # failure the THIRD-PARTY REPOSITORIES summary at the end warns about: one
+    # channel with no per-Fedora chroots, so it stops resolving after a branch
+    # and kills the next `dnf system-upgrade` — the same reasoning that keeps
+    # ONLYOFFICE/Collabora off their vendor repos. Flathub hosts Brave's own
+    # Electron build, and it updates with everything else via `update-all`.
+    # Fedora's default browser stays Firefox; this only makes Brave available.
+    step "Brave (Chromium-based browser)" \
+        flatpak install -y --noninteractive flathub com.brave.Browser
+}
+
+section_filesharing() {
+    header "FILE SHARING — LAN transfer, sync & backup"
+
+    step "Flatpak + Flathub" ensure_flatpak
+
+    # LocalSend is the "AirDrop that works": device-to-device over the LAN, no
+    # account, no cloud, no external server. The phone apps are the same
+    # project, so Android/iOS/iPadOS/Windows/macOS/Linux all see each other.
+    step "LocalSend (send files over the local network)" \
+        flatpak install -y --noninteractive flathub org.localsend.localsend_app
+
+    # FreeFileSync is comparison-first sync: a dry-run shows the diff, then you
+    # apply it, and it ships RealTimeSync as a companion. Flathub hosts a
+    # community-maintained build that downloads the upstream binary (proprietary,
+    # like Spotify) at install time — same trade, and no vendor repo to break an
+    # upgrade.
+    step "FreeFileSync (folder comparison & synchronization)" \
+        flatpak install -y --noninteractive flathub org.freefilesync.FreeFileSync
+
+    # Syncthing IS in Fedora's own repos, so no COPR and no vendor repo. Its Web
+    # UI (localhost:8384, GUI in the browser) is the whole interface; the
+    # per-user unit makes sync come up at boot and keep running. Real-time
+    # continuous sync between your own devices is what distinguishes it from the
+    # manual transfer (LocalSend) and the one-shot comparison (FreeFileSync).
+    step "Syncthing (continuous, private sync across your devices)" \
+        dnf -y install syncthing
+    step "Enable Syncthing for $REAL_USER at boot" \
+        systemctl enable "syncthing@$REAL_USER.service"
 }
 
 # Both office sections exist because the choice is genuinely a fork, not a

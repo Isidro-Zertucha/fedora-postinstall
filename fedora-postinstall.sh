@@ -477,7 +477,7 @@ run_menu() {
         done
         echo
 
-        read -n1 -s -r key
+        IFS= read -n1 -s -r key
         case "$key" in
             $'\e')                       # arrow keys arrive as ESC [ A / ESC O A
                 read -n2 -s -r -t 0.05 seq || true

@@ -475,6 +475,12 @@ local cur=0 key seq total=${#all[@]} vis top
     (( vis < 6 )) && vis=6
     (( vis > total )) && vis=$total
 
+    # Name column width follows the longest section name, plus breathing room,
+    # so the description column always starts at the same, comfortable spot.
+    local nw=0 l
+    for s in "${all[@]}"; do l=${#s}; (( l > nw )) && nw=$l; done
+    nw=$(( nw + 2 ))
+
     while true; do
         clear 2>/dev/null || true
         echo -e "${BOLD}==> Select sections${NC}  (defaults pre-checked; optionals off — ${total} total)"
@@ -498,10 +504,10 @@ local cur=0 key seq total=${#all[@]} vis top
             mark=" "
             [[ ${checked[$s]} -eq 1 ]] && mark="x"
             if (( i == cur )); then
-                printf "${BOLD}\e[7m  %2d) [%s] %-11s %s\e[0m${NC}\n" \
+                printf "${BOLD}\e[7m  %2d) [%s] %-${nw}s %s\e[0m${NC}\n" \
                     "$((i+1))" "$mark" "$s" "${SECTION_DESC[$s]:-}"
             else
-                printf "  %2d) [%s] %-11s %s\n" \
+                printf "  %2d) [%s] %-${nw}s %s\n" \
                     "$((i+1))" "$mark" "$s" "${SECTION_DESC[$s]:-}"
             fi
         done

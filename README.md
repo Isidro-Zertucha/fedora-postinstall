@@ -23,7 +23,15 @@ behave like GNOME. Separate script, separate command — it is not part of the p
 sudo bash -c "$(curl -fsSL https://raw.githubusercontent.com/Isidro-Zertucha/fedora-postinstall/main/fedora-postinstall.sh)"
 ```
 
-With flags — everything after `--` is passed to the script:
+That is all. On a terminal with **no flags** it opens an **interactive picker** where you
+check the sections you want (`x` = install, blank = skip). The defaults come pre-checked,
+optionals start unchecked — press Enter to install exactly what is marked, or `n` to
+uncheck everything and build your own set. `--menu` forces the picker; it is otherwise
+the default behaviour whenever stdin is a terminal. Without a terminal (cron, SSH, a
+pipe, an unattended script) the defaults run straight through instead, so nothing ever
+hangs waiting on a prompt.
+
+With flags, the picker is skipped — everything after `--` is passed to the script:
 
 ```bash
 # Add optional sections
@@ -54,7 +62,8 @@ chmod +x fedora-postinstall.sh
 sudo ./fedora-postinstall.sh --with gametweaks
 ```
 
-Prefer to pick sections interactively instead of memorizing flags? Run the local file with `--menu`:
+Prefer to pick sections interactively instead of memorizing flags? The local file does that
+by default on a terminal; `--menu` forces the picker explicitly:
 
 ```bash
 sudo ./fedora-postinstall.sh --menu
@@ -74,7 +83,7 @@ sudo ./fedora-postinstall.sh --menu
 | `flatpak` | Flathub (unfiltered) + Flatseal, Warehouse (rollback, runtimes, leftover user data) and Gear Lever (AppImage integration), plus Extension Manager on GNOME |
 | `gaming`  | Steam, `steam-devices`, gamescope, MangoHud, GOverlay, vkBasalt, GameMode, protontricks, ProtonPlus, `vm.max_map_count` tweak |
 | `snapper` | Btrfs snapshots + dnf integration + Btrfs Assistant GUI (skipped if root isn't Btrfs) |
-| `media`   | OBS Studio + virtual camera (`v4l2loopback`), mpv, yt-dlp |
+| `media`   | mpv + yt-dlp (the player and the downloader everyone appreciates) |
 | `dev`     | git/gh/build tools, Docker CE, nvm (Node LTS), uv (Python), VS Code |
 | `virt`    | KVM/QEMU + virt-manager |
 | `qol`     | Archive formats, fonts, monitors (htop/btop/fastfetch + **Mission Center** for per-process GPU, VRAM and encoder load, which the terminal ones can't see), tldr, desktop-matched extras |
@@ -93,6 +102,7 @@ sudo ./fedora-postinstall.sh --menu
 | `heroic`     | Heroic Games Launcher (Flathub) — GOG, Epic and Amazon libraries. GOG Galaxy still has no Linux client (announced July 2026, no release date), so this is how you get a GOG library on Fedora. Overlaps `lutris`: Heroic is store-first, Lutris is the full platform |
 | `faugus`     | Faugus Launcher — minimal UMU/Proton launcher for individual Windows games (native COPR build; built-in GE-Proton manager). Overlaps `lutris`: pick the simple per-`.exe` tool (`faugus`) or the full platform (`lutris`) |
 | `gametweaks` | `scx_lavd` scheduler as a **toggle** (stock kernel) + `split_lock_detect=off` |
+| `streaming` | OBS Studio + virtual camera (`v4l2loopback`) — screen capture and streaming. Split out of `media` on purpose: OBS is a niche tool and drags a kernel module with it, so it belongs behind an opt-in, while mpv/yt-dlp stay in the defaults |
 | `creative`   | GIMP, Inkscape, Kdenlive, Audacity, Blender, draw.io. All Flatpaks: every one is published on Flathub by its own upstream and tracks releases immediately, while Fedora's builds trail (Blender and Kdenlive worst of all), and none of them needs host integration. draw.io Desktop is the web editor with the network side cut out — no account, no upload, files stay local as diffable `.drawio` XML |
 | `apps`       | Discord (Vesktop, for working Wayland screenshare), ZapZap (WhatsApp — the platform has no Linux client and no API, so every option wraps WhatsApp Web; ZapZap is the one with tray icon, native notifications and multi-account), Telegram, Spotify, Foliate (e-books). Foliate is the one **native** entry: Fedora packages it from the same upstream tags Flathub does, so the Flatpak buys no freshness and only adds a second WebKitGTK — and native reads books off any mounted drive without sandbox permissions |
 | `onlyoffice` | ONLYOFFICE Desktop Editors (Flathub). See [Office suite: pick one](#office-suite-pick-one) |
@@ -148,8 +158,10 @@ with everything else via `update-all`.
 `--menu` opens a terminal checklist (defaults pre-checked, optionals off): type a number
 to toggle a section, `a`/`n` for all/none, `d` to reset to defaults, Enter to install, `q` to
 quit. It writes the checked set to `--only`, so it needs a real TTY — the `bash -c "$(curl …)"`
-form above keeps one, so `--menu` works remotely too. Only the `curl | bash` **pipe** form breaks
-it, because there stdin *is* the download stream.
+form above keeps one, so the picker works remotely too. Only the `curl | bash` **pipe** form
+breaks it, because there stdin *is* the download stream (and without a stdin TTY the
+"no flags" path degrades to the defaults instead). Running with **no flags at all** is the
+same picker — you only need `--menu` to force it when there are other flags around.
 
 Everything is **idempotent** — re-running only does what's still missing, and a failed step (one bad
 repo, one missing package) is logged and skipped instead of aborting the whole run. Full log at

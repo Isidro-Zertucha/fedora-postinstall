@@ -11,7 +11,7 @@
 #   gaming   Steam, steam-devices, gamescope, MangoHud, GOverlay, vkBasalt,
 #            GameMode, protontricks, ProtonPlus, vm.max_map_count tweak
 #   snapper  Btrfs snapshots + Btrfs Assistant GUI
-#   media    OBS Studio + virtual camera (v4l2loopback), mpv, yt-dlp
+#   media    mpv (lightweight player), yt-dlp
 #   dev      git/tooling, Docker CE, nvm (Node), uv (Python), VS Code
 #   virt     KVM/QEMU + virt-manager
 #   qol      archives, fonts (incl. MS core fonts), monitors (htop/btop/Mission
@@ -32,6 +32,7 @@
 #   heroic      Heroic Games Launcher — GOG/Epic/Amazon libraries (Flatpak)
 #   faugus      Faugus Launcher — minimal UMU/Proton launcher for Windows games
 #   gametweaks  scx_lavd scheduler as a TOGGLE (stock kernel), split_lock_detect=off
+#   streaming   OBS Studio + virtual camera (v4l2loopback) — screen capture/streaming
 #   creative    GIMP, Inkscape, Kdenlive, Audacity, Blender, draw.io — Flatpaks
 #   apps        Discord (Vesktop), ZapZap (WhatsApp), Telegram, Spotify,
 #               Foliate (e-book reader)
@@ -64,8 +65,8 @@
 # Atomic, Bazzite) are refused up front — they layer with rpm-ostree, not dnf.
 #
 # Usage:
-#   sudo ./fedora-postinstall.sh                      # all defaults, auto GPU
-#   sudo ./fedora-postinstall.sh --menu               # interactive section picker
+#   sudo ./fedora-postinstall.sh                      # TTY: interactive picker; no TTY: all defaults
+#   sudo ./fedora-postinstall.sh --menu               # force the interactive section picker
 #   sudo ./fedora-postinstall.sh --no-nvidia          # skip NVIDIA even if present
 #   sudo ./fedora-postinstall.sh --with legion,gametweaks
 #   sudo ./fedora-postinstall.sh --parallel 1               # bad network: serial downloads
@@ -84,7 +85,7 @@ set -uo pipefail
 LOG_FILE="/var/log/fedora-postinstall.log"
 REPO_RAW="https://raw.githubusercontent.com/Isidro-Zertucha/fedora-postinstall/main/fedora-postinstall.sh"
 DEFAULT_SECTIONS=(base codecs nvidia flatpak gaming snapper media dev virt qol)
-OPTIONAL_SECTIONS=(legion asus battery peripherals distrobox wine lutris heroic faugus gametweaks creative apps onlyoffice collabora mycomputer)
+OPTIONAL_SECTIONS=(legion asus battery peripherals distrobox wine lutris heroic faugus gametweaks streaming creative apps onlyoffice collabora mycomputer)
 FORCE_NVIDIA=""          # "", "yes", "no"
 ONLY_SECTIONS=""
 SKIP_SECTIONS=""
@@ -92,7 +93,7 @@ WITH_SECTIONS=""
 FAILED_STEPS=()
 NVM_VERSION="v0.40.3"    # bump when nvm releases; check github.com/nvm-sh/nvm
 PARALLEL_DL=""           # "" = auto-detect from network probe; or forced via --parallel N
-MENU_MODE=""             # "yes" = show the interactive section picker before running
+MENU_MODE=""             # "yes" = force the interactive section picker; opens by default on a TTY with no flags
 
 RED='\033[0;31m'; GREEN='\033[0;32m'; YELLOW='\033[1;33m'
 BLUE='\033[0;34m'; BOLD='\033[1m'; NC='\033[0m'
@@ -373,7 +374,8 @@ declare -A SECTION_DESC=(
     [flatpak]="Flathub + Flatseal + Warehouse + Gear Lever (+ Ext Manager on GNOME)"
     [gaming]="Steam, gamescope, MangoHud, GameMode, ProtonPlus"
     [snapper]="Btrfs snapshots + Btrfs Assistant GUI"
-    [media]="OBS Studio + virtual camera, mpv, yt-dlp"
+    [media]="mpv video player, yt-dlp downloads"
+    [streaming]="OBS Studio + virtual camera (v4l2loopback) — screen capture/streaming"
     [dev]="git tooling, Docker CE, nvm, uv, VS Code"
     [virt]="KVM/QEMU + virt-manager"
     [qol]="fonts, archives, monitors (+ Mission Center), desktop extras"
@@ -408,7 +410,7 @@ Usage:
   sudo bash -c "\$(curl -fsSL $REPO_RAW)" -- [flags]
 
 Flags:
-  --menu                 Interactive picker: check/uncheck sections, then install
+  --menu                 Force the interactive picker (a TTY with no flags opens it anyway)
   --nvidia               Force NVIDIA setup even if no card is detected
   --no-nvidia            Skip NVIDIA even if a card is present
   --only  a,b,c          Run ONLY these sections
@@ -550,9 +552,13 @@ section_base() {
 #!/usr/bin/env bash
 # Update everything: rpm packages, flatpaks, firmware.
 set -uo pipefail
-echo "==> dnf" && sudo dnf upgrade --refresh -y
-echo "==> flatpak" && flatpak update -y
-echo "==> firmware" && sudo fwupdmgr refresh --force; sudo fwupdmgr update || true
+echo "==> dnf"
+sudo dnf upgrade --refresh -y || { echo "dnf upgrade FAILED" >&2; exit 1; }
+echo "==> flatpak"
+flatpak update -y || echo "flatpak update FAILED" >&2
+echo "==> firmware"
+sudo fwupdmgr refresh --force || echo "firmware metadata refresh FAILED" >&2
+sudo fwupdmgr update || echo "firmware update FAILED" >&2
 echo "==> done"
 UPD
         chmod +x /usr/local/bin/update-all
@@ -631,6 +637,12 @@ section_nvidia() {
         warn "Secure Boot is ENABLED — setting up module signing key"
         if [[ ! -f /etc/pki/akmods/certs/public_key.der ]]; then
             step "Generate signing key (kmodgenca)" kmodgenca -a
+            if [[ ! -f /etc/pki/akmods/certs/public_key.der ]]; then
+                err "Signing key generation failed — the kmod will not match Secure Boot"
+                err "and would leave the machine on a black screen. Aborting NVIDIA section."
+                FAILED_STEPS+=("NVIDIA signing key (kmodgenca) failed — driver left unsigned")
+                return
+            fi
             warn "Enrolling MOK key — you will be asked to CREATE A PASSWORD."
             warn "On next reboot, a blue 'MOK Manager' screen appears:"
             warn "  Enroll MOK → Continue → Yes → enter that password → reboot."
@@ -722,9 +734,17 @@ section_gaming() {
     step "ProtonPlus (GE-Proton manager)" \
         flatpak install -y --noninteractive flathub com.vysp3r.ProtonPlus
 
-    # SteamOS/Nobara-style: some titles exhaust the default mmap count
-    if [[ ! -f /etc/sysctl.d/99-gaming.conf ]]; then
-        echo "vm.max_map_count=2147483642" > /etc/sysctl.d/99-gaming.conf
+    # SteamOS/Nobara-style: some titles exhaust the default mmap count.
+    # Idempotent AND self-healing: fix the value even if the file already
+    # exists with a wrong number, while preserving any other user tuning in it.
+    if grep -qx 'vm.max_map_count=2147483642' /etc/sysctl.d/99-gaming.conf 2>/dev/null; then
+        ok "vm.max_map_count already at the SteamOS value"
+    else
+        if ! grep -q '^vm.max_map_count=' /etc/sysctl.d/99-gaming.conf 2>/dev/null; then
+            echo "vm.max_map_count=2147483642" >> /etc/sysctl.d/99-gaming.conf
+        else
+            sed -i 's/^vm.max_map_count=.*/vm.max_map_count=2147483642/' /etc/sysctl.d/99-gaming.conf
+        fi
         sysctl --system >/dev/null 2>&1 || true
         ok "vm.max_map_count raised (SteamOS value — fixes crashes in some titles)"
     fi
@@ -765,7 +785,15 @@ section_snapper() {
 }
 
 section_media() {
-    header "MEDIA — OBS Studio + virtual camera, mpv, yt-dlp"
+    header "MEDIA — mpv + yt-dlp"
+
+    step "mpv (lightweight media player)" dnf -y install mpv
+
+    step "yt-dlp" dnf -y install yt-dlp
+}
+
+section_streaming() {
+    header "STREAMING — OBS Studio + virtual camera"
 
     # OBS stays NATIVE on purpose, even though upstream also ships a Flatpak.
     # The virtual camera below is a host kernel module, and third-party OBS
@@ -778,11 +806,6 @@ section_media() {
     step "v4l2loopback (OBS virtual camera)" bash -c \
         'dnf -y install akmod-v4l2loopback v4l2loopback-utils ||
          dnf -y install akmod-v4l2loopback'
-
-
-    step "mpv (lightweight media player)" dnf -y install mpv
-
-    step "yt-dlp" dnf -y install yt-dlp
 
     ok "Virtual camera appears in OBS after next reboot (module builds like NVIDIA's)"
 }
@@ -1786,9 +1809,21 @@ while [[ $# -gt 0 ]]; do
         --menu)        MENU_MODE="yes"; shift ;;
         --nvidia)      FORCE_NVIDIA="yes"; shift ;;
         --no-nvidia)   FORCE_NVIDIA="no"; shift ;;
-        --only)        ONLY_SECTIONS="$2"; shift 2 ;;
-        --skip)        SKIP_SECTIONS="$2"; shift 2 ;;
-        --with)        WITH_SECTIONS="$2"; shift 2 ;;
+        --only)        if [[ -n "${2:-}" ]]; then
+                           ONLY_SECTIONS="$2"; shift 2
+                       else
+                           err "--only needs a comma-separated section list"; exit 1
+                       fi ;;
+        --skip)        if [[ -n "${2:-}" ]]; then
+                           SKIP_SECTIONS="$2"; shift 2
+                       else
+                           err "--skip needs a comma-separated section list"; exit 1
+                       fi ;;
+        --with)        if [[ -n "${2:-}" ]]; then
+                           WITH_SECTIONS="$2"; shift 2
+                       else
+                           err "--with needs a comma-separated section list"; exit 1
+                       fi ;;
         --parallel)    if [[ "$2" =~ ^[0-9]+$ ]] && (( $2 >= 1 && $2 <= 20 )); then
                            PARALLEL_DL="$2"; shift 2
                        else
@@ -1820,6 +1855,14 @@ done
 # ---------------------------------------------------------------------------
 # Main
 # ---------------------------------------------------------------------------
+# --only is an explicit selection; --skip and --with modify the defaults, so
+# combining them is contradictory. Refuse rather than let --only win silently.
+if [[ -n "$ONLY_SECTIONS" && ( -n "$SKIP_SECTIONS" || -n "$WITH_SECTIONS" ) ]]; then
+    err "--only cannot be combined with --skip or --with"
+    err "  use only --only a,b,c, or the default set with --skip/--with"
+    exit 1
+fi
+
 validate_sections --only "$ONLY_SECTIONS"
 validate_sections --skip "$SKIP_SECTIONS"
 validate_sections --with "$WITH_SECTIONS"
@@ -1833,7 +1876,13 @@ header "Fedora post-install (v3) — log: $LOG_FILE"
 log "User: $REAL_USER | GPU(s): $(lspci -nn | grep -Ei 'vga|3d' | sed 's/^[0-9a-f:.]* //' | paste -sd ' | ')"
 
 # Interactive picker overrides section selection with exactly the checked set.
-[[ "$MENU_MODE" == "yes" ]] && run_menu
+# No flags + a terminal -> the picker opens by default (defaults pre-checked;
+# uncheck what you do not want). No flags + no TTY (cron, SSH, scripts, pipes)
+# -> the defaults run straight through so nothing hangs waiting on a prompt.
+# Any explicit flag keeps the script non-interactive, exactly as before.
+if [[ "$MENU_MODE" == "yes" ]] || { [[ ${#ORIGINAL_ARGS[@]} -eq 0 ]] && [[ -t 0 ]]; }; then
+    run_menu
+fi
 
 for s in "${DEFAULT_SECTIONS[@]}" "${OPTIONAL_SECTIONS[@]}"; do
     if section_enabled "$s"; then
@@ -1874,8 +1923,19 @@ mapfile -t EXTRA_REPOS < <(dnf repolist --enabled 2>/dev/null |
     awk 'NR>1 && $1 !~ /^(fedora|updates|repo|Last)/ {print $1}')
 if [[ ${#EXTRA_REPOS[@]} -gt 0 ]]; then
     warn "These are not Fedora repos. Before a 'dnf system-upgrade', disable any"
-    warn "that has not published packages for the new release:"
-    for r in "${EXTRA_REPOS[@]}"; do warn "  - $r"; done
+    warn "that has not published packages for the new release. The groups do not"
+    warn "share the same upgrade risk:"
+    warn "  RPM Fusion  — driver/codec packages, tracks Fedora & EPEL releases"
+    warn "  COPR        — user/namespace builds, the most likely to go stale"
+    warn "  Vendor      — upstream repos (Docker, VS Code), track their own cadence"
+    for r in "${EXTRA_REPOS[@]}"; do
+        case "$r" in
+            rpmfusion*) label="RPM Fusion" ;;
+            copr:*)     label="COPR" ;;
+            *)          label="Vendor" ;;
+        esac
+        warn "  - [$label] $r"
+    done
     warn "Disable one:  dnf config-manager setopt <repo-id>.enabled=0"
 else
     ok "No third-party repositories enabled"

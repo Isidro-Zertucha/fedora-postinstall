@@ -9,7 +9,7 @@
 #   flatpak  Flathub (unfiltered) + Flatseal + Warehouse + Gear Lever
 #            + Extension Manager (GNOME)
 #   snapper  Btrfs snapshots + Btrfs Assistant GUI
-#   media    mpv (lightweight player), yt-dlp
+#   media    mpv (lightweight player), yt-dlp, EasyEffects (EQ + mic de-noising)
 #   virt     KVM/QEMU + virt-manager
 #   qol      archives, fonts (incl. MS core fonts), monitors (htop/btop/Mission
 #            Center), Obsidian, tldr, desktop extras
@@ -381,7 +381,7 @@ declare -A SECTION_DESC=(
     [flatpak]="Flathub + Flatseal + Warehouse + Gear Lever (+ Ext Manager on GNOME)"
     [gaming]="Steam, gamescope, MangoHud, GameMode, ProtonPlus, Bottles"
     [snapper]="Btrfs snapshots + Btrfs Assistant GUI"
-    [media]="mpv video player, yt-dlp downloads"
+    [media]="mpv video player, yt-dlp downloads, EasyEffects per-device EQ + RNNoise"
     [streaming]="OBS Studio + virtual camera (v4l2loopback) — screen capture/streaming"
     [dev]="git tooling, Docker CE, nvm, uv, Go, VS Code, DBeaver, Orca"
     [virt]="KVM/QEMU + virt-manager"
@@ -837,11 +837,15 @@ section_snapper() {
 }
 
 section_media() {
-    header "MEDIA — mpv + yt-dlp"
+    header "MEDIA — mpv, yt-dlp, EasyEffects"
 
     step "mpv (lightweight media player)" dnf -y install mpv
 
     step "yt-dlp" dnf -y install yt-dlp
+
+    step "Flatpak + Flathub" ensure_flatpak
+    step "EasyEffects (audio EQ + mic noise reduction via RNNoise)" \
+        flatpak install -y --noninteractive flathub com.github.wwmm.easyeffects
 }
 
 section_streaming() {

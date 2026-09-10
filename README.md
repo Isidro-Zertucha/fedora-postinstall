@@ -82,7 +82,7 @@ sudo ./fedora-postinstall.sh --menu
 | `nvidia`  | Proprietary driver (akmod) + CUDA/NVENC, **driver branch matched to the GPU** (legacy `580xx`/`470xx`/`390xx` for pre-Turing cards), **open kernel modules** (needed for RTX 50-series), and **Secure Boot module signing** (MOK enrollment) — *auto-detected* |
 | `flatpak` | Flathub (unfiltered) + Flatseal, Warehouse (rollback, runtimes, leftover user data) and Gear Lever (AppImage integration), plus Extension Manager on GNOME |
 | `snapper` | Btrfs snapshots + dnf integration + Btrfs Assistant GUI (skipped if root isn't Btrfs) |
-| `media`   | mpv + yt-dlp (the player and the downloader everyone appreciates) |
+| `media`   | mpv + yt-dlp (the player and the downloader everyone appreciates), + **EasyEffects** (per-device EQ and mic noise reduction via RNNoise, a PipeWire effect chain) |
 | `virt`    | KVM/QEMU + virt-manager |
 | `qol`     | Archive formats, fonts, monitors (htop/btop/fastfetch + **Mission Center** for per-process GPU, VRAM and encoder load, which the terminal ones can't see), **Obsidian** (notes/PKM, via Flathub), tldr, desktop-matched extras |
 

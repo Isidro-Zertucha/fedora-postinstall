@@ -925,23 +925,31 @@ section_dev() {
         ok "docker command already available (podman-docker)"
     fi
 
-    if ! command -v podman-compose >/dev/null 2>&1; then
-        step "Install podman-compose" dnf -y install podman-compose
-    else
-        ok "podman-compose already present"
-    fi
-
     if [[ "$REAL_USER" != "root" ]]; then
+        local uid
+        uid=$(id -u "$REAL_USER")
         step "Enable rootless Podman socket (Docker API)" enable_podman_socket
+
+        # Direct docker-compose invocations default to /var/run/docker.sock;
+        # point them at the rootless Podman socket instead.
+        if ! grep -q '^DOCKER_HOST=' /etc/environment; then
+            step "Point DOCKER_HOST at the rootless Podman socket" \
+                bash -c "echo 'DOCKER_HOST=unix:///run/user/$uid/podman/podman.sock' >> /etc/environment"
+        else
+            ok "DOCKER_HOST already set"
+        fi
     fi
 
-    # docker-compose → podman compose: a real executable, not a shell alias,
-    # so non-interactive contexts (scripts, Makefiles, cron) see it too.
-    if [[ ! -x /usr/local/bin/docker-compose ]]; then
-        step "Map docker-compose → podman compose" \
-            bash -c 'printf "#!/bin/sh\nexec podman compose \"\$@\"\n" > /usr/local/bin/docker-compose && chmod +x /usr/local/bin/docker-compose'
+    # Docker Compose v2 — the reference Compose implementation — talks to the
+    # Podman socket, so compose files get the full spec behaviour (gated
+    # depends_on, --wait, profiles, deploy resources) against a Podman engine.
+    # Image BUILD is the one gap in Podman's Docker-API: build with
+    # `podman build` (or `docker build`) and use `up --no-build`.
+    if [[ ! -x /usr/local/bin/docker-compose ]] || ! docker-compose version >/dev/null 2>&1; then
+        step "Install docker-compose v2 (official static binary)" bash -c \
+            'curl -fsSL https://github.com/docker/compose/releases/latest/download/docker-compose-linux-x86_64 -o /usr/local/bin/docker-compose && chmod +x /usr/local/bin/docker-compose'
     else
-        ok "docker-compose shim already in place"
+        ok "docker-compose v2 already in place"
     fi
 
     # --- Podman Desktop (container GUI over the rootless socket) -------------

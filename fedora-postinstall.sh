@@ -24,7 +24,7 @@
 #               — all from Fedora's own repos, no COPR and no out-of-tree
 #               kernel modules
 #   distrobox   containerized dev environments (Podman-backed) + DistroShelf GUI
-#   dev         git/tooling, Docker CE, nvm (Node), uv (Python), Go, VS Code,
+#   dev         git/tooling, Podman-as-Docker, nvm (Node), uv (Python), Go, VS Code,
 #               DBeaver Community, Orca (Agent Development Environment)
 #   wine        Wine + winetricks (non-Steam Windows software)
 #   lutris      Lutris game launcher (Epic/GOG/emulators/install scripts)
@@ -176,6 +176,22 @@ REAL_USER="${SUDO_USER:-$(logname 2>/dev/null || echo root)}"
 REAL_HOME=$(getent passwd "$REAL_USER" | cut -d: -f6)
 
 as_user() { sudo -u "$REAL_USER" bash -c "$1"; }
+
+# Rootless Podman API socket for the real user. This is what makes Docker-
+# protocol clients (devcontainers, Portainer, compose tooling) work over
+# DOCKER_HOST=unix://$XDG_RUNTIME_DIR/podman/podman.sock with no root daemon
+# and no docker group. loginctl lingering keeps it alive after logout; we do
+# not hard-fail on it because it can race the first graphical session.
+enable_podman_socket() {
+    local uid sock
+    uid=$(id -u "$REAL_USER")
+    sock="/run/user/$uid/podman/podman.sock"
+    [[ -S "$sock" ]] && { ok "Rootless Podman socket already active"; return 0; }
+    loginctl enable-linger "$REAL_USER" >/dev/null 2>&1 ||
+        warn "loginctl enable-linger failed — socket may not persist after logout"
+    XDG_RUNTIME_DIR="/run/user/$uid" runuser -u "$REAL_USER" -- \
+        systemctl --user enable --now podman.socket
+}
 
 has_nvidia_gpu() { lspci -nn | grep -Ei 'vga|3d' | grep -qi nvidia; }
 has_amd_gpu()    { lspci -nn | grep -Ei 'vga|3d' | grep -qEi 'amd|radeon'; }
@@ -383,7 +399,7 @@ declare -A SECTION_DESC=(
     [snapper]="Btrfs snapshots + Btrfs Assistant GUI"
     [media]="mpv video player, yt-dlp downloads, EasyEffects per-device EQ + RNNoise"
     [streaming]="OBS Studio + virtual camera (v4l2loopback) — screen capture/streaming"
-    [dev]="git tooling, Docker CE, nvm, uv, Go, VS Code, DBeaver, Orca"
+    [dev]="git tooling, Podman-as-Docker + Podman Desktop UI, nvm, uv, Go, VS Code, DBeaver, Orca"
     [virt]="KVM/QEMU + virt-manager"
     [qol]="fonts, archives, monitors (+ Mission Center), Obsidian, desktop extras"
     [legion]="Lenovo Legion power modes (native kernel check)"
@@ -867,7 +883,7 @@ section_streaming() {
 }
 
 section_dev() {
-    header "DEV — tooling, Docker CE, nvm (Node), uv (Python), VS Code, Orca"
+    header "DEV — tooling, Podman-as-Docker (+ Desktop UI), nvm (Node), uv (Python), VS Code, Orca"
 
     step "Core dev tools" dnf -y install \
         git gh make gcc gcc-c++ zsh tmux jq ripgrep fd-find fzf
@@ -892,22 +908,46 @@ section_dev() {
         ok "nvm already installed for $REAL_USER"
     fi
 
-    # --- Docker CE (matches Dokploy & most production/CI environments) -----
-    # Podman ships with Fedora and coexists fine. Do NOT install podman-docker.
-    if ! command -v docker >/dev/null 2>&1; then
-        step "Add Docker CE repo" bash -c \
-            'dnf config-manager addrepo --from-repofile=https://download.docker.com/linux/fedora/docker-ce.repo 2>/dev/null ||
-             dnf config-manager --add-repo https://download.docker.com/linux/fedora/docker-ce.repo'
-        step "Install Docker CE" dnf -y install \
-            docker-ce docker-ce-cli containerd.io docker-buildx-plugin docker-compose-plugin
-        step "Enable Docker daemon" systemctl enable --now docker
-        if [[ "$REAL_USER" != "root" ]]; then
-            step "Add $REAL_USER to docker group" usermod -aG docker "$REAL_USER"
-            warn "Log out/in for docker group to apply"
-        fi
+    # --- Podman as Docker (rootless, daemonless) ---------------------------
+    # Desktop spins already ship Podman; this layer restores Docker parity for
+    # tools that assume it: the docker CLI, Compose and the Docker API socket.
+    if ! command -v podman >/dev/null 2>&1; then
+        step "Install Podman" dnf -y install podman
     else
-        ok "Docker already present"
+        ok "Podman already present"
     fi
+
+    # podman-docker symlinks /usr/bin/docker → podman, so Dockerfiles, CI
+    # scripts and IDEs that shell out to the docker CLI run unchanged.
+    if ! command -v docker >/dev/null 2>&1; then
+        step "Install podman-docker (docker → podman)" dnf -y install podman-docker
+    else
+        ok "docker command already available (podman-docker)"
+    fi
+
+    if ! command -v podman-compose >/dev/null 2>&1; then
+        step "Install podman-compose" dnf -y install podman-compose
+    else
+        ok "podman-compose already present"
+    fi
+
+    if [[ "$REAL_USER" != "root" ]]; then
+        step "Enable rootless Podman socket (Docker API)" enable_podman_socket
+    fi
+
+    # docker-compose → podman compose: a real executable, not a shell alias,
+    # so non-interactive contexts (scripts, Makefiles, cron) see it too.
+    if [[ ! -x /usr/local/bin/docker-compose ]]; then
+        step "Map docker-compose → podman compose" \
+            bash -c 'printf "#!/bin/sh\nexec podman compose \"\$@\"\n" > /usr/local/bin/docker-compose && chmod +x /usr/local/bin/docker-compose'
+    else
+        ok "docker-compose shim already in place"
+    fi
+
+    # --- Podman Desktop (container GUI over the rootless socket) -------------
+    step "Flatpak + Flathub" ensure_flatpak
+    step "Podman Desktop (container GUI)" \
+        flatpak install -y --noninteractive flathub io.podman_desktop.PodmanDesktop
 
     # --- VS Code (Microsoft repo) -------------------------------------------
     if ! command -v code >/dev/null 2>&1; then

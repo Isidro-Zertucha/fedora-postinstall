@@ -25,7 +25,7 @@
 #               kernel modules
 #   distrobox   containerized dev environments (Podman-backed) + DistroShelf GUI
 #   dev         git/tooling, Podman-as-Docker, nvm (Node), uv (Python), Go, VS Code,
-#               DBeaver Community, Orca (Agent Development Environment)
+#               DBeaver Community, Orca (Agent Development Environment), OpenCode
 #   wine        Wine + winetricks (non-Steam Windows software)
 #   lutris      Lutris game launcher (Epic/GOG/emulators/install scripts)
 #   heroic      Heroic Games Launcher — GOG/Epic/Amazon libraries (Flatpak)
@@ -399,7 +399,7 @@ declare -A SECTION_DESC=(
     [snapper]="Btrfs snapshots + Btrfs Assistant GUI"
     [media]="mpv video player, yt-dlp downloads, EasyEffects per-device EQ + RNNoise"
     [streaming]="OBS Studio + virtual camera (v4l2loopback) — screen capture/streaming"
-    [dev]="git tooling, Podman-as-Docker + Podman Desktop UI, nvm, uv, Go, VS Code, DBeaver, Orca"
+    [dev]="git tooling, Podman-as-Docker + Podman Desktop UI, nvm, uv, Go, VS Code, DBeaver, Orca, OpenCode"
     [virt]="KVM/QEMU + virt-manager"
     [qol]="fonts, archives, monitors (+ Mission Center), Obsidian, desktop extras"
     [legion]="Lenovo Legion power modes (native kernel check)"
@@ -883,7 +883,7 @@ section_streaming() {
 }
 
 section_dev() {
-    header "DEV — tooling, Podman-as-Docker (+ Desktop UI), nvm (Node), uv (Python), VS Code, Orca"
+    header "DEV — tooling, Podman-as-Docker (+ Desktop UI), nvm (Node), uv (Python), VS Code, Orca, OpenCode"
 
     step "Core dev tools" dnf -y install \
         git gh make gcc gcc-c++ zsh tmux jq ripgrep fd-find fzf
@@ -989,6 +989,21 @@ REPO
         step "Install Orca (ADE + orca-ide CLI)" dnf -y install /tmp/orca-ide.rpm
     else
         ok "Orca already present"
+    fi
+
+    # --- OpenCode (AI coding agent CLI) --------------------------------------
+    # Installer from opencode.ai drops a static binary in ~/.opencode/bin and
+    # wires it into the shell rc of the real user — config and API keys belong
+    # in their home, and composer discovers it via the same PATH. Like nvm,
+    # skip quietly when there is no usable home.
+    if [[ -z "$REAL_HOME" || ! -d "$REAL_HOME" ]]; then
+        warn "No home directory for $REAL_USER — skipping OpenCode"
+        FAILED_STEPS+=("opencode (no home directory for $REAL_USER)")
+    elif ! command -v opencode >/dev/null 2>&1 && [[ ! -x "$REAL_HOME/.opencode/bin/opencode" ]]; then
+        step "Install OpenCode ($REAL_USER)" as_user \
+            "curl -fsSL https://opencode.ai/install | bash"
+    else
+        ok "OpenCode already present"
     fi
 
     # --- DBeaver Community (database IDE, Flathub) --------------------------

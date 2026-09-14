@@ -34,7 +34,7 @@
 #   gaming      Steam, gamescope, MangoHud, GOverlay, vkBasalt, GameMode,
 #               protontricks, ProtonPlus, Bottles, vm.max_map_count tweak
 #   streaming   OBS Studio + virtual camera (v4l2loopback) — screen capture/streaming
-#   creative    GIMP, Inkscape, Kdenlive, Audacity, Blender, draw.io — Flatpaks
+#   creative    GIMP, Inkscape, Kdenlive, Drift, Audacity, Blender, draw.io — Flatpaks
 #   communication Vesktop (Discord), Telegram, ZapZap (WhatsApp) — Flathub
 #   music         Spotify — Flathub
 #   reading       Foliate e-book reader — native dnf
@@ -412,7 +412,7 @@ declare -A SECTION_DESC=(
     [heroic]="GOG/Epic/Amazon library launcher (Flathub)"
     [faugus]="minimal UMU/Proton launcher for Windows games"
     [gametweaks]="scx_lavd game-mode toggle, split-lock off"
-    [creative]="GIMP, Inkscape, Kdenlive, Audacity, Blender, draw.io"
+    [creative]="GIMP, Inkscape, Kdenlive, Drift, Audacity, Blender, draw.io"
     [communication]="Vesktop (Discord), Telegram, ZapZap (WhatsApp)"
     [music]="Spotify"
     [reading]="Foliate e-book reader (EPUB/MOBI/FB2/CBZ)"
@@ -1778,6 +1778,12 @@ section_creative() {
         flatpak install -y --noninteractive flathub org.inkscape.Inkscape
     step "Kdenlive" \
         flatpak install -y --noninteractive flathub org.kde.kdenlive
+    # Drift is the fast-and-pretty counterpart to Kdenlive: Qt6/FFmpeg editor
+    # aimed at Reels/Shorts, game clips and quick exports. One compositor, no
+    # subscription. Complementary, not competing — Kdenlive stays the pro-track
+    # timeline.
+    step "Drift" \
+        flatpak install -y --noninteractive flathub org.cutwire.Drift
     step "Audacity" \
         flatpak install -y --noninteractive flathub org.audacityteam.Audacity
     step "Blender" \

@@ -1641,11 +1641,12 @@ section_wine() {
 
     step "Install Wine + winetricks" dnf -y install wine winetricks
 
-    # Steam (RPM Fusion) recommends ntsync-autoload, so the gaming section gets
-    # it; the plain `wine` package does not pull it. Without it the ntsync kernel
-    # module (Windows sync primitives, kernel 6.14+) is never loaded at boot.
-    # step_soft: the package name postdates older releases, and this is optional.
-    step_soft "NTSYNC autoload (Windows sync primitives)" dnf -y install ntsync-autoload
+    # Steam pulls ntsync-autoload in as a weak dependency, so the 'gaming'
+    # section never needed it. Fedora's plain 'wine' package does not, which
+    # leaves anyone running --with wine alone without the ntsync module loaded
+    # at boot. step_soft: the package may not exist on every Fedora release.
+    step_soft "ntsync-autoload (loads the ntsync module at boot)" \
+        dnf -y install ntsync-autoload
 
     ok "For GUI management of Wine prefixes, consider Bottles (Flathub)"
 }

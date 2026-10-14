@@ -2035,7 +2035,7 @@ while [[ $# -gt 0 ]]; do
                        else
                            err "--with needs a comma-separated section list"; exit 1
                        fi ;;
-        --parallel)    if [[ "$2" =~ ^[0-9]+$ ]] && (( $2 >= 1 && $2 <= 20 )); then
+        --parallel)    if [[ "${2:-}" =~ ^[0-9]+$ ]] && (( $2 >= 1 && $2 <= 20 )); then
                            PARALLEL_DL="$2"; shift 2
                        else
                            err "--parallel takes a number 1-20"; exit 1

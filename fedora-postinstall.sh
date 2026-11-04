@@ -193,6 +193,16 @@ enable_podman_socket() {
         systemctl --user enable --now podman.socket
 }
 
+# Newest installed kernel, as akmods/modinfo name it (VERSION-RELEASE.ARCH).
+# The module has to be checked against THIS kernel, not the running one: after
+# the base-section upgrade the next boot is a newer kernel than the current one.
+newest_kernel() {
+    local k
+    k=$(rpm -q --qf '%{VERSION}-%{RELEASE}.%{ARCH}\n' kernel-core 2>/dev/null | sort -V | tail -n1) || return 1
+    [[ -n "$k" ]] || return 1
+    printf '%s\n' "$k"
+}
+
 has_nvidia_gpu() { lspci -nn | grep -Ei 'vga|3d' | grep -qi nvidia; }
 has_amd_gpu()    { lspci -nn | grep -Ei 'vga|3d' | grep -qEi 'amd|radeon'; }
 has_intel_gpu()  { lspci -nn | grep -Ei 'vga|3d' | grep -qi intel; }
@@ -628,6 +638,18 @@ fail_nvidia() {
     exit 1
 }
 
+# fwupdmgr exits 2 for "ran fine, nothing to do" (no firmware updates pending,
+# metadata already current). That is success, not a failure: only 0 and 2 pass.
+fw_phase() {
+    local desc="$1" rc=0
+    shift
+    sudo fwupdmgr "$@" || rc=$?
+    if [[ $rc -ne 0 && $rc -ne 2 ]]; then
+        echo "$desc FAILED (exit $rc)" >&2
+        failed=1
+    fi
+}
+
 echo "==> dnf"
 sudo dnf upgrade --refresh -y || { echo "dnf upgrade FAILED" >&2; exit 1; }
 
@@ -642,6 +664,8 @@ if grep -Eq '^akmod-nvidia(-|$)' <<< "$nvidia_packages"; then
     target_kernel=$(rpm -q --qf '%{VERSION}-%{RELEASE}.%{ARCH}\n' kernel-core 2>/dev/null | sort -V | tail -n1)
     [[ -n "$target_kernel" ]] || fail_nvidia "could not identify an installed kernel"
 
+    # --force retries failed builds without forcing a full rebuild of modules
+    # that akmods already considers current; --rebuild is the costly override.
     if ! sudo akmods --force --kernels "$target_kernel"; then
         fail_nvidia "akmods could not build the module for $target_kernel"
     fi
@@ -649,27 +673,31 @@ if grep -Eq '^akmod-nvidia(-|$)' <<< "$nvidia_packages"; then
         fail_nvidia "no NVIDIA module found for $target_kernel"
     [[ -n "$module_version" ]] || fail_nvidia "no NVIDIA module found for $target_kernel"
 
-    secure_boot_state=$(mokutil --sb-state 2>&1) ||
-        fail_nvidia "could not determine Secure Boot state"
-    if grep -qi 'SecureBoot enabled' <<< "$secure_boot_state"; then
-        module_signer=$(modinfo -k "$target_kernel" -F signer nvidia 2>/dev/null) ||
-            fail_nvidia "could not read the NVIDIA module signature"
-        [[ -n "$module_signer" ]] || fail_nvidia "the NVIDIA module for $target_kernel is unsigned"
-        signing_key=/etc/pki/akmods/certs/public_key.der
-        if ! sudo mokutil --test-key "$signing_key" >/dev/null 2>&1; then
-            # Initial driver installation intentionally queues the key for the
-            # next boot. Permit that one safe path only when MokManager will
-            # enroll this exact certificate; otherwise a signed module would
-            # still be rejected by Secure Boot after reboot.
-            key_fingerprint=$(sudo openssl x509 -inform DER -in "$signing_key" -noout -fingerprint -sha1 2>/dev/null |
-                sed -E 's/.*=//' | tr -d ':[:space:]' | tr '[:lower:]' '[:upper:]')
-            pending_fingerprints=$(sudo mokutil --list-new 2>/dev/null |
-                sed -nE 's/.*SHA1 Fingerprint:[[:space:]]*//p' | tr -d ':[:space:]' | tr '[:lower:]' '[:upper:]')
-            if [[ -n "$key_fingerprint" && "$pending_fingerprints" == *"$key_fingerprint"* ]]; then
-                echo "Secure Boot: matching akmods key is pending MOK enrollment."
-                echo "On reboot, choose Enroll MOK and complete the enrollment before boot continues."
-            else
-                fail_nvidia "the akmods signing key is neither enrolled nor pending MOK enrollment"
+    # Secure Boot only exists on UEFI. On a legacy-BIOS install mokutil has
+    # nothing to report and may exit non-zero, which must not read as a failure.
+    if [[ -d /sys/firmware/efi ]]; then
+        secure_boot_state=$(mokutil --sb-state 2>&1) ||
+            fail_nvidia "could not determine Secure Boot state"
+        if grep -qi 'SecureBoot enabled' <<< "$secure_boot_state"; then
+            module_signer=$(modinfo -k "$target_kernel" -F signer nvidia 2>/dev/null) ||
+                fail_nvidia "could not read the NVIDIA module signature"
+            [[ -n "$module_signer" ]] || fail_nvidia "the NVIDIA module for $target_kernel is unsigned"
+            signing_key=/etc/pki/akmods/certs/public_key.der
+            if ! sudo mokutil --test-key "$signing_key" >/dev/null 2>&1; then
+                # Initial driver installation intentionally queues the key for the
+                # next boot. Permit that one safe path only when MokManager will
+                # enroll this exact certificate; otherwise a signed module would
+                # still be rejected by Secure Boot after reboot.
+                key_fingerprint=$(sudo openssl x509 -inform DER -in "$signing_key" -noout -fingerprint -sha1 2>/dev/null |
+                    sed -E 's/.*=//' | tr -d ':[:space:]' | tr '[:lower:]' '[:upper:]')
+                pending_fingerprints=$(sudo mokutil --list-new 2>/dev/null |
+                    sed -nE 's/.*SHA1 Fingerprint:[[:space:]]*//p' | tr -d ':[:space:]' | tr '[:lower:]' '[:upper:]')
+                if [[ -n "$key_fingerprint" && "$pending_fingerprints" == *"$key_fingerprint"* ]]; then
+                    echo "Secure Boot: matching akmods key is pending MOK enrollment."
+                    echo "On reboot, choose Enroll MOK and complete the enrollment before boot continues."
+                else
+                    fail_nvidia "the akmods signing key is neither enrolled nor pending MOK enrollment"
+                fi
             fi
         fi
     fi
@@ -679,8 +707,8 @@ fi
 echo "==> flatpak"
 flatpak update -y || { echo "flatpak update FAILED" >&2; failed=1; }
 echo "==> firmware"
-sudo fwupdmgr refresh --force || { echo "firmware metadata refresh FAILED" >&2; failed=1; }
-sudo fwupdmgr update || { echo "firmware update FAILED" >&2; failed=1; }
+fw_phase "firmware metadata refresh" refresh --force
+fw_phase "firmware update" update
 if [[ $failed -ne 0 ]]; then
     echo "Update finished with one or more phase failures; review the messages above." >&2
     exit 1
@@ -794,11 +822,22 @@ section_nvidia() {
         ok "Open kernel modules pinned on (required for RTX 50-series)"
     fi
 
-    log "Building kernel module now (this takes a few minutes)..."
-    step "Build NVIDIA kmod" akmods --force
+    local target_kernel failed_before=${#FAILED_STEPS[@]}
+    if ! target_kernel=$(newest_kernel); then
+        err "Cannot identify the newest installed kernel; refusing to prepare NVIDIA for reboot."
+        FAILED_STEPS+=("NVIDIA target kernel detection")
+        return
+    fi
+    log "Building kernel module for $target_kernel now (this takes a few minutes)..."
+    # --force retries previously failed builds; --rebuild would force a costly
+    # rebuild even when the module is already current.
+    step "Build NVIDIA kmod ($target_kernel)" akmods --force --kernels "$target_kernel"
+    if (( ${#FAILED_STEPS[@]} > failed_before )); then
+        return
+    fi
 
     warn "Do NOT reboot until the module is built. Verify with:"
-    warn "    modinfo -F version nvidia"
+    warn "    modinfo -k $target_kernel -F version nvidia"
     warn "If it prints a version number, you are safe to reboot."
 }
 
@@ -2178,13 +2217,18 @@ fi
 
 if has_nvidia_gpu && [[ "$FORCE_NVIDIA" != "no" ]]; then
     NVIDIA_BRANCH=$(nvidia_branch)
-    warn "NVIDIA checklist before reboot:"
-    warn "  1. modinfo -F version nvidia   → must print a version"
-    if [[ -n "$NVIDIA_BRANCH" ]]; then
-        warn "     This GPU needs the ${NVIDIA_BRANCH%xx}.x branch — a version from any"
-        warn "     other branch means the module will not drive the card."
+    if ! NVIDIA_KERNEL=$(newest_kernel); then
+        warn "Could not identify the newest installed kernel — do not reboot until verified manually."
+        FAILED_STEPS+=("NVIDIA target kernel detection")
+    else
+        warn "NVIDIA checklist before reboot:"
+        warn "  1. modinfo -k $NVIDIA_KERNEL -F version nvidia   → must print a version"
+        if [[ -n "$NVIDIA_BRANCH" ]]; then
+            warn "     This GPU needs the ${NVIDIA_BRANCH%xx}.x branch — a version from any"
+            warn "     other branch means the module will not drive the card."
+        fi
+        warn "  2. If Secure Boot: expect the MOK Manager screen on reboot"
     fi
-    warn "  2. If Secure Boot: expect the MOK Manager screen on reboot"
 fi
 # Third-party repos are the usual reason `dnf system-upgrade` fails: a COPR or
 # vendor repo with no chroot for the new release stops the transaction dead. The
@@ -2213,4 +2257,8 @@ else
     ok "No third-party repositories enabled"
 fi
 
-warn "Reboot recommended:  systemctl reboot"
+if [[ ${#FAILED_STEPS[@]} -gt 0 ]]; then
+    warn "Do not reboot until the failed steps above are resolved."
+else
+    warn "Reboot recommended:  systemctl reboot"
+fi

@@ -23,7 +23,37 @@ awk '
     capture { sub(/^        /, ""); print }
 ' "$ROOT/fedora-postinstall.sh" > "$TMP/update-all"
 [[ -s "$TMP/update-all" ]] || fail "could not extract generated update-all helper"
+# WSL lacks this read-only sysfs directory. Point the extracted helper at a
+# temporary stand-in so Secure Boot checks can still be exercised end to end.
+mkdir -p "$TMP/efi-sysfs"
+sed -i "s|/sys/firmware/efi|$TMP/efi-sysfs|g" "$TMP/update-all"
 chmod +x "$TMP/update-all"
+
+# Reuse the installer helper in isolation to ensure a failed kernel inventory
+# cannot silently fall back to the currently running kernel.
+awk '
+    /^newest_kernel\(\) \{/ { capture = 1 }
+    capture { print }
+    capture && /^}/ { exit }
+' "$ROOT/fedora-postinstall.sh" > "$TMP/newest-kernel.sh"
+[[ -s "$TMP/newest-kernel.sh" ]] || fail "could not extract newest_kernel helper"
+source "$TMP/newest-kernel.sh"
+mkdir -p "$TMP/kernel-query-bin"
+cat > "$TMP/kernel-query-bin/rpm" <<'STUB'
+#!/usr/bin/env bash
+[[ "${KERNEL_QUERY_STATUS:-0}" -eq 0 ]] || exit "$KERNEL_QUERY_STATUS"
+printf '6.20.4-200.fc44.x86_64\n'
+STUB
+cat > "$TMP/kernel-query-bin/uname" <<'STUB'
+#!/usr/bin/env bash
+printf '6.20.3-200.fc44.x86_64\n'
+STUB
+chmod +x "$TMP/kernel-query-bin"/*
+PATH="$TMP/kernel-query-bin:$PATH"
+[[ $(newest_kernel) == '6.20.4-200.fc44.x86_64' ]] || fail "newest_kernel should return the newest installed kernel"
+if result=$(KERNEL_QUERY_STATUS=1 newest_kernel 2>/dev/null); then
+    fail "newest_kernel must fail rather than fall back to the running kernel when RPM inventory fails"
+fi
 
 make_stubs() {
     local bin=$1 log=$2
@@ -164,6 +194,10 @@ assert_contains "$TMP/flatpak-failed.out" 'flatpak update FAILED'
 run_update firmware-failed env FWUPD_STATUS=1
 [[ $(cat "$TMP/firmware-failed.status") -ne 0 ]] || fail "firmware failure must fail update-all"
 assert_contains "$TMP/firmware-failed.out" 'firmware update FAILED'
+
+run_update firmware-noop env FWUPD_STATUS=2
+[[ $(cat "$TMP/firmware-noop.status") -eq 0 ]] || fail "fwupdmgr no-op exit status 2 should be treated as success"
+assert_contains "$TMP/firmware-noop.out" 'All update phases completed successfully.'
 
 run_update firmware-refresh-failed env FWUPD_STATUS=1
 [[ $(cat "$TMP/firmware-refresh-failed.status") -ne 0 ]] || fail "firmware metadata failure must fail update-all"

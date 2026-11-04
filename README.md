@@ -240,26 +240,44 @@ full`, charge to 100%, then set the cap back.
 
 ## After it finishes
 
-If you have an NVIDIA GPU, **verify before rebooting**:
+If you have an NVIDIA GPU, the updater checks the driver for the newest
+installed kernel before it proceeds to Flatpak or firmware. You can also check
+it manually before rebooting:
 
 ```bash
-modinfo -F version nvidia    # must print a version number
+kernel=$(rpm -q --qf '%{VERSION}-%{RELEASE}.%{ARCH}\n' kernel-core | sort -V | tail -n1)
+modinfo -k "$kernel" -F version nvidia    # must print a version number
 ```
 
+- Check the **target kernel**, not just `modinfo -F version nvidia`: without
+  `-k`, `modinfo` reports the module for the currently running kernel, which
+  may be older than the one Fedora just installed.
 - The version must belong to the branch your card needs. Driver **595** dropped
   Maxwell, Pascal and Volta (GTX 900 / 10-series, Quadro P), so those cards get
   the legacy `580xx` packages instead. The script picks the branch by GPU, but
   the check is worth doing: a module from the wrong branch builds and loads
   metadata fine, then leaves you on a black screen.
-- If **Secure Boot** is on, a blue **MOK Manager** screen appears on the next reboot:
-  *Enroll MOK → Continue → Yes → enter the password you set → reboot.*
+- With **Secure Boot** enabled, the updater also checks that the target module
+  is signed and that its akmods key is enrolled. If that exact key is queued for
+  enrollment, the next reboot opens **MOK Manager**: choose *Enroll MOK →
+  Continue → Yes*, enter the password you set, then reboot. If the module is
+  unsigned or the key is neither enrolled nor pending, **do not reboot**; fix
+  the build/signing issue first.
 - Then reboot: `systemctl reboot`
 
 Update everything later with the installed helper:
 
 ```bash
-update-all               # dnf + flatpak + firmware, one command
+update-all               # RPM + NVIDIA readiness + Flatpak + firmware
 ```
+
+The phases are deliberate: an RPM transaction failure stops the run; an NVIDIA
+readiness failure tells you not to reboot and stops before Flatpak/firmware;
+Flatpak and firmware failures are reported and produce a non-zero exit status.
+The helper does not roll back RPM changes automatically. The currently running
+kernel remains active until reboot; if a reboot has already happened, choose the
+previous kernel from GRUB. Re-running the post-install script refreshes the
+managed `update-all` helper on existing installations.
 
 ---
 

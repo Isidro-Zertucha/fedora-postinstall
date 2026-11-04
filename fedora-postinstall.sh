@@ -611,24 +611,84 @@ section_base() {
             systemctl disable NetworkManager-wait-online.service
     fi
 
-    # One-command full system update (dnf + flatpak + firmware)
-    if [[ ! -f /usr/local/bin/update-all ]]; then
-        cat > /usr/local/bin/update-all <<'UPD'
+    # Refresh our managed update helper on every installer run so existing
+    # systems receive safety fixes instead of keeping the first version forever.
+    cat > /usr/local/bin/update-all <<'UPD'
 #!/usr/bin/env bash
-# Update everything: rpm packages, flatpaks, firmware.
+# Update RPM packages, verify NVIDIA for the newest installed kernel, then
+# update Flatpaks and firmware as independent, clearly reported phases.
 set -uo pipefail
+
+failed=0
+
+fail_nvidia() {
+    echo "NVIDIA readiness check FAILED: $*" >&2
+    echo "Do not reboot. The currently running kernel is still active." >&2
+    echo "Fix the NVIDIA build/signing issue first; if you already rebooted, choose the previous kernel in GRUB." >&2
+    exit 1
+}
+
 echo "==> dnf"
 sudo dnf upgrade --refresh -y || { echo "dnf upgrade FAILED" >&2; exit 1; }
-echo "==> flatpak"
-flatpak update -y || echo "flatpak update FAILED" >&2
-echo "==> firmware"
-sudo fwupdmgr refresh --force || echo "firmware metadata refresh FAILED" >&2
-sudo fwupdmgr update || echo "firmware update FAILED" >&2
-echo "==> done"
-UPD
-        chmod +x /usr/local/bin/update-all
-        ok "Installed 'update-all' → one command updates dnf + flatpak + firmware"
+
+# `modinfo nvidia` without -k checks the running kernel. After a kernel update
+# that can falsely report success while the next kernel has no usable module.
+nvidia_packages=$(rpm -qa --qf '%{NAME}\n') || {
+    echo "Could not inspect installed RPM packages; stopping before reboot." >&2
+    exit 1
+}
+if grep -Eq '^akmod-nvidia(-|$)' <<< "$nvidia_packages"; then
+    echo "==> NVIDIA module for newest installed kernel"
+    target_kernel=$(rpm -q --qf '%{VERSION}-%{RELEASE}.%{ARCH}\n' kernel-core 2>/dev/null | sort -V | tail -n1)
+    [[ -n "$target_kernel" ]] || fail_nvidia "could not identify an installed kernel"
+
+    if ! sudo akmods --force --kernels "$target_kernel"; then
+        fail_nvidia "akmods could not build the module for $target_kernel"
     fi
+    module_version=$(modinfo -k "$target_kernel" -F version nvidia 2>/dev/null) ||
+        fail_nvidia "no NVIDIA module found for $target_kernel"
+    [[ -n "$module_version" ]] || fail_nvidia "no NVIDIA module found for $target_kernel"
+
+    secure_boot_state=$(mokutil --sb-state 2>&1) ||
+        fail_nvidia "could not determine Secure Boot state"
+    if grep -qi 'SecureBoot enabled' <<< "$secure_boot_state"; then
+        module_signer=$(modinfo -k "$target_kernel" -F signer nvidia 2>/dev/null) ||
+            fail_nvidia "could not read the NVIDIA module signature"
+        [[ -n "$module_signer" ]] || fail_nvidia "the NVIDIA module for $target_kernel is unsigned"
+        signing_key=/etc/pki/akmods/certs/public_key.der
+        if ! sudo mokutil --test-key "$signing_key" >/dev/null 2>&1; then
+            # Initial driver installation intentionally queues the key for the
+            # next boot. Permit that one safe path only when MokManager will
+            # enroll this exact certificate; otherwise a signed module would
+            # still be rejected by Secure Boot after reboot.
+            key_fingerprint=$(sudo openssl x509 -inform DER -in "$signing_key" -noout -fingerprint -sha1 2>/dev/null |
+                sed -E 's/.*=//' | tr -d ':[:space:]' | tr '[:lower:]' '[:upper:]')
+            pending_fingerprints=$(sudo mokutil --list-new 2>/dev/null |
+                sed -nE 's/.*SHA1 Fingerprint:[[:space:]]*//p' | tr -d ':[:space:]' | tr '[:lower:]' '[:upper:]')
+            if [[ -n "$key_fingerprint" && "$pending_fingerprints" == *"$key_fingerprint"* ]]; then
+                echo "Secure Boot: matching akmods key is pending MOK enrollment."
+                echo "On reboot, choose Enroll MOK and complete the enrollment before boot continues."
+            else
+                fail_nvidia "the akmods signing key is neither enrolled nor pending MOK enrollment"
+            fi
+        fi
+    fi
+    echo "NVIDIA module ready for $target_kernel (version $module_version)."
+fi
+
+echo "==> flatpak"
+flatpak update -y || { echo "flatpak update FAILED" >&2; failed=1; }
+echo "==> firmware"
+sudo fwupdmgr refresh --force || { echo "firmware metadata refresh FAILED" >&2; failed=1; }
+sudo fwupdmgr update || { echo "firmware update FAILED" >&2; failed=1; }
+if [[ $failed -ne 0 ]]; then
+    echo "Update finished with one or more phase failures; review the messages above." >&2
+    exit 1
+fi
+echo "All update phases completed successfully."
+UPD
+    chmod +x /usr/local/bin/update-all
+    ok "Installed/updated 'update-all' → RPM + NVIDIA readiness + Flatpak + firmware"
 }
 
 section_codecs() {

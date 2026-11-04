@@ -97,6 +97,7 @@ ONLY_SECTIONS=""
 SKIP_SECTIONS=""
 WITH_SECTIONS=""
 FAILED_STEPS=()
+REBOOT_BLOCKED=""        # set ONLY by failures that make rebooting unsafe (NVIDIA module/signing)
 NVM_VERSION="v0.40.3"    # bump when nvm releases; check github.com/nvm-sh/nvm
 PARALLEL_DL=""           # "" = auto-detect from network probe; or forced via --parallel N
 MENU_MODE=""             # "yes" = force the interactive section picker; opens by default on a TTY with no flags
@@ -765,6 +766,11 @@ section_nvidia() {
 
     header "NVIDIA — proprietary driver (akmod), CUDA/NVENC, Secure Boot signing"
 
+    # Any failed step from here on (signing tooling, key, driver, kmod build)
+    # leaves a machine that may not boot to a working display, so count them
+    # all from the very first one, not only the build.
+    local failed_before=${#FAILED_STEPS[@]}
+
     # Every package of a legacy branch must carry the same suffix. A mixed set
     # (akmod-nvidia-580xx with a current xorg-x11-drv-nvidia) installs cleanly
     # and then fails to load, which looks identical to a build failure.
@@ -794,13 +800,16 @@ section_nvidia() {
                 err "Signing key generation failed — the kmod will not match Secure Boot"
                 err "and would leave the machine on a black screen. Aborting NVIDIA section."
                 FAILED_STEPS+=("NVIDIA signing key (kmodgenca) failed — driver left unsigned")
+                REBOOT_BLOCKED=1
                 return
             fi
             warn "Enrolling MOK key — you will be asked to CREATE A PASSWORD."
             warn "On next reboot, a blue 'MOK Manager' screen appears:"
             warn "  Enroll MOK → Continue → Yes → enter that password → reboot."
-            mokutil --import /etc/pki/akmods/certs/public_key.der || \
+            mokutil --import /etc/pki/akmods/certs/public_key.der || {
                 FAILED_STEPS+=("MOK import — run manually: mokutil --import /etc/pki/akmods/certs/public_key.der")
+                REBOOT_BLOCKED=1
+            }
         else
             ok "Signing key already exists (enrolled previously or pending)"
         fi
@@ -822,10 +831,11 @@ section_nvidia() {
         ok "Open kernel modules pinned on (required for RTX 50-series)"
     fi
 
-    local target_kernel failed_before=${#FAILED_STEPS[@]}
+    local target_kernel
     if ! target_kernel=$(newest_kernel); then
         err "Cannot identify the newest installed kernel; refusing to prepare NVIDIA for reboot."
         FAILED_STEPS+=("NVIDIA target kernel detection")
+        REBOOT_BLOCKED=1
         return
     fi
     log "Building kernel module for $target_kernel now (this takes a few minutes)..."
@@ -833,6 +843,7 @@ section_nvidia() {
     # rebuild even when the module is already current.
     step "Build NVIDIA kmod ($target_kernel)" akmods --force --kernels "$target_kernel"
     if (( ${#FAILED_STEPS[@]} > failed_before )); then
+        REBOOT_BLOCKED=1
         return
     fi
 
@@ -2219,7 +2230,7 @@ if has_nvidia_gpu && [[ "$FORCE_NVIDIA" != "no" ]]; then
     NVIDIA_BRANCH=$(nvidia_branch)
     if ! NVIDIA_KERNEL=$(newest_kernel); then
         warn "Could not identify the newest installed kernel — do not reboot until verified manually."
-        FAILED_STEPS+=("NVIDIA target kernel detection")
+        REBOOT_BLOCKED=1
     else
         warn "NVIDIA checklist before reboot:"
         warn "  1. modinfo -k $NVIDIA_KERNEL -F version nvidia   → must print a version"
@@ -2257,8 +2268,8 @@ else
     ok "No third-party repositories enabled"
 fi
 
-if [[ ${#FAILED_STEPS[@]} -gt 0 ]]; then
-    warn "Do not reboot until the failed steps above are resolved."
+if [[ -n "$REBOOT_BLOCKED" ]]; then
+    warn "Do not reboot: the NVIDIA setup above did not finish cleanly. Fix it first."
 else
     warn "Reboot recommended:  systemctl reboot"
 fi

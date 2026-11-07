@@ -12,7 +12,7 @@
 #   media    mpv (lightweight player), yt-dlp, EasyEffects (EQ + mic de-noising)
 #   virt     KVM/QEMU + virt-manager
 #   qol      archives, fonts (incl. MS core fonts), monitors (htop/btop/Mission
-#            Center), Obsidian, tldr, desktop extras
+#            Center), Obsidian, Aura live wallpapers, tldr, desktop extras
 #
 # Optional sections (only with --with):
 #   legion      Lenovo Legion power modes (verifies native kernel support first)
@@ -29,6 +29,7 @@
 #   wine        Wine + winetricks (non-Steam Windows software)
 #   lutris      Lutris game launcher (Epic/GOG/emulators/install scripts)
 #   heroic      Heroic Games Launcher — GOG/Epic/Amazon libraries (Flatpak)
+#   photos      Ente Photos — end-to-end encrypted photo backup (verified Flathub)
 #   faugus      Faugus Launcher — minimal UMU/Proton launcher for Windows games
 #   gametweaks  scx_lavd scheduler as a TOGGLE (stock kernel), split_lock_detect=off
 #   gaming      Steam, gamescope, MangoHud, GOverlay, vkBasalt, GameMode,
@@ -91,7 +92,7 @@ set -uo pipefail
 LOG_FILE="/var/log/fedora-postinstall.log"
 REPO_RAW="https://raw.githubusercontent.com/Isidro-Zertucha/fedora-postinstall/main/fedora-postinstall.sh"
 DEFAULT_SECTIONS=(base codecs nvidia flatpak snapper media virt qol)
-OPTIONAL_SECTIONS=(legion asus battery peripherals distrobox dev wine lutris heroic faugus gametweaks gaming streaming creative communication music reading browser filesharing onlyoffice collabora mycomputer)
+OPTIONAL_SECTIONS=(legion asus battery peripherals distrobox dev wine lutris heroic faugus gametweaks gaming streaming creative communication music reading browser filesharing photos onlyoffice collabora mycomputer)
 FORCE_NVIDIA=""          # "", "yes", "no"
 ONLY_SECTIONS=""
 SKIP_SECTIONS=""
@@ -406,13 +407,13 @@ declare -A SECTION_DESC=(
     [codecs]="full ffmpeg, GStreamer, hardware video acceleration"
     [nvidia]="proprietary driver + CUDA/NVENC (auto-skips if no NVIDIA)"
     [flatpak]="Flathub + Flatseal + Warehouse + Gear Lever (+ Ext Manager on GNOME)"
-    [gaming]="Steam, gamescope, MangoHud, GameMode, ProtonPlus, Bottles"
+    [gaming]="Steam, gamescope, MangoHud, GameMode, ProtonPlus, Bottles, Heronite"
     [snapper]="Btrfs snapshots + Btrfs Assistant GUI"
     [media]="mpv video player, yt-dlp downloads, EasyEffects per-device EQ + RNNoise"
     [streaming]="OBS Studio + virtual camera (v4l2loopback) — screen capture/streaming"
     [dev]="git tooling, Podman-as-Docker + Podman Desktop UI, nvm, uv, Go, VS Code, DBeaver, Orca, OpenCode"
     [virt]="KVM/QEMU + virt-manager"
-    [qol]="fonts, archives, monitors (+ Mission Center), Obsidian, desktop extras"
+    [qol]="fonts, archives, monitors (+ Mission Center), Obsidian, Aura wallpapers, desktop extras"
     [legion]="Lenovo Legion power modes (native kernel check)"
     [asus]="asusctl + supergfxctl (ASUS laptops)"
     [battery]="charge cap at 80% — any vendor, persists reboot/resume"
@@ -421,6 +422,7 @@ declare -A SECTION_DESC=(
     [wine]="Wine + winetricks (non-Steam Windows software)"
     [lutris]="launcher for Epic/GOG/emulators/install scripts"
     [heroic]="GOG/Epic/Amazon library launcher (Flathub)"
+    [photos]="Ente Photos — end-to-end encrypted photo backup (Flathub)"
     [faugus]="minimal UMU/Proton launcher for Windows games"
     [gametweaks]="scx_lavd game-mode toggle, split-lock off"
     [creative]="GIMP, Inkscape, Kdenlive, Drift, Audacity, Blender, draw.io"
@@ -912,6 +914,12 @@ section_gaming() {
     step "Bottles (GUI Wine-prefix manager)" \
         flatpak install -y --noninteractive flathub com.usebottles.bottles
 
+    # Upstream publishes a Fedora RPM on each GitHub release. DNF installs the
+    # RPM directly from GitHub, so dependencies and subsequent updates remain
+    # package-managed rather than relying on an AppImage.
+    step "Heronite (unified game library and launcher)" bash -c \
+        'release=$(curl -fsSL "https://api.github.com/repos/RafaelGoulartB/Heronite/releases/latest") || exit; url=$(printf "%s" "$release" | grep -oE "https://[^\"]+\.x86_64\.rpm" | head -n1); [[ -n "$url" ]] || { echo "no x86_64 Fedora RPM in the latest Heronite release"; exit 1; }; tmp=$(mktemp -d); trap '\''rm -rf "$tmp"'\'' EXIT; rpm="$tmp/${url##*/}"; curl -fsSL "$url" -o "$rpm" && curl -fsSL "${url%/*}/SHA256SUMS" -o "$tmp/SHA256SUMS" || exit; (cd "$tmp" && grep -E "  ${rpm##*/}$" SHA256SUMS | sha256sum -c -) || exit; dnf -y install "$rpm"'
+
     # SteamOS/Nobara-style: some titles exhaust the default mmap count.
     # Idempotent AND self-healing: fix the value even if the file already
     # exists with a wrong number, while preserving any other user tuning in it.
@@ -1255,6 +1263,12 @@ section_qol() {
 
     step "Obsidian (notes/PKM)" \
         flatpak install -y --noninteractive flathub md.obsidian.Obsidian
+
+    # Aura's upstream installer verifies the published release checksum and
+    # installs into the user's local application paths.
+    step_soft "Aura (live wallpapers; GNOME support is experimental)" \
+        runuser -u "$REAL_USER" -- bash -c \
+        'tmp=$(mktemp); trap '\''rm -f "$tmp"'\'' EXIT; curl -fsSL https://raw.githubusercontent.com/antwny/aura/main/install.sh -o "$tmp" && bash "$tmp"'
 
     step_soft "Fonts" dnf -y install \
         google-noto-emoji-fonts google-noto-sans-fonts jetbrains-mono-fonts \
@@ -2014,6 +2028,15 @@ section_filesharing() {
         dnf -y install syncthing
     step "Enable Syncthing for $REAL_USER at boot" \
         systemctl enable "syncthing@$REAL_USER.service"
+}
+
+section_photos() {
+    header "PHOTOS — encrypted photo backup"
+
+    step "Flatpak + Flathub" ensure_flatpak
+    # Ente Photos is verified on Flathub (io.ente.photos).
+    step "Ente Photos (end-to-end encrypted photo backup)" \
+        flatpak install -y --noninteractive flathub io.ente.photos
 }
 
 # Both office sections exist because the choice is genuinely a fork, not a

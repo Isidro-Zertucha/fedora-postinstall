@@ -90,6 +90,7 @@ sudo ./fedora-postinstall.sh --menu
 
 | Section      | What it does |
 |--------------|--------------|
+| `privacy`    | Encrypted DNS (**DNS-over-TLS**) via systemd-resolved. **Quad9** by default — malware/phishing blocking, DNSSEC validation, no user IP logging. `--dns cloudflare` for the unfiltered alternative. Off unless you ask for it |
 | `legion`     | LenovoLegionLinux — community fan/power control (falls back to source instructions if COPR is stale) |
 | `asus`       | asusctl + supergfxctl (ASUS laptops, asus-linux.org COPR) |
 | `battery`    | Charge threshold, default 80%, persisted across reboot **and** resume. Vendor-neutral: detected from the `power_supply` sysfs class, so Lenovo, ASUS, ThinkPad, Huawei and Framework are one code path. Installs the `battery-limit` tool |
@@ -112,6 +113,39 @@ sudo ./fedora-postinstall.sh --menu
 | `photos`     | **Ente Photos**, an end-to-end encrypted photo backup app, installed from verified Flathub (`io.ente.photos`) |
 | `onlyoffice` | ONLYOFFICE Desktop Editors (Flathub). See [Office suite: pick one](#office-suite-pick-one) |
 | `collabora`  | Collabora Office (Flathub). See [Office suite: pick one](#office-suite-pick-one) |
+
+### Encrypted DNS (`--with privacy`)
+
+The `privacy` section is **off by default**. It enables `systemd-resolved` and writes
+`/etc/systemd/resolved.conf.d/99-privacy.conf`, sending every DNS query over
+**DNS-over-TLS (port 853)** to **Quad9**:
+
+| Provider | Addresses | Notes |
+|---|---|---|
+| `quad9` (default) | `9.9.9.9`, `149.112.112.112` (+ IPv6) | Blocks malware/phishing/fraud at the DNS layer, validates DNSSEC, does not record user IPs (Swiss foundation) |
+| `cloudflare` | `1.1.1.1`, `1.0.0.1` (+ IPv6) | No filtering; often a few ms faster on cold lookups |
+
+```bash
+sudo ./fedora-postinstall.sh --with privacy
+sudo ./fedora-postinstall.sh --with privacy --dns cloudflare
+```
+
+`DNSOverTLS=yes` is strict — a resolver that cannot complete the TLS handshake is not
+used — and `FallbackDNS=` is emptied so resolved never silently falls back to plaintext.
+**If your network blocks port 853, DNS stops working**; remove the drop-in to revert.
+
+Revert:
+
+```bash
+sudo rm -f /etc/systemd/resolved.conf.d/99-privacy.conf
+sudo systemctl disable --now systemd-resolved
+sudo ln -sfn ../run/NetworkManager/resolv.conf /etc/resolv.conf
+# If the script backed up a regular resolv.conf, restore it instead of the symlink:
+# sudo mv /etc/resolv.conf.pre-privacy /etc/resolv.conf
+```
+
+The script backs up a regular `/etc/resolv.conf` to `/etc/resolv.conf.pre-privacy` before
+replacing it with the resolved stub symlink.
 
 ### Office suite: pick one
 
@@ -154,6 +188,7 @@ with everything else via `update-all`.
 --skip  a,b,c          Run defaults EXCEPT these
 --with  a,b,c          Add optional sections to the defaults
 --parallel N           Force dnf parallel downloads (1–20); default: auto-probe the network
+--dns PROVIDER         Encrypted DNS for --with privacy: quad9 (default)|cloudflare
 --scx VERB             Gaming scheduler toggle: on|off|status|boot-on|boot-off
 --battery VERB         Charge cap: <40-100>|full|status|apply
 --list                 List available sections and exit

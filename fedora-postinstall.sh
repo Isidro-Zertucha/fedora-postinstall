@@ -92,7 +92,16 @@ set -uo pipefail
 LOG_FILE="/var/log/fedora-postinstall.log"
 REPO_RAW="https://raw.githubusercontent.com/Isidro-Zertucha/fedora-postinstall/main/fedora-postinstall.sh"
 DEFAULT_SECTIONS=(base codecs nvidia flatpak snapper media virt qol)
-OPTIONAL_SECTIONS=(legion asus battery peripherals distrobox dev wine lutris heroic faugus gametweaks gaming streaming creative communication music reading browser filesharing photos onlyoffice collabora mycomputer)
+OPTIONAL_SECTIONS=(privacy legion asus battery peripherals distrobox dev wine lutris heroic faugus gametweaks gaming streaming creative communication music reading browser filesharing photos onlyoffice collabora mycomputer)
+
+# Encrypted DNS providers for the optional `privacy` section. Each value is the
+# systemd-resolved DNS= list; the #hostname suffix is what lets resolved verify
+# the DoT certificate. Addresses come from the providers' own service pages:
+# Quad9's malware-blocking tier (IPv4 + IPv6) and Cloudflare's unfiltered pair.
+declare -A DNS_PROVIDERS=(
+    [quad9]="9.9.9.9#dns.quad9.net 149.112.112.112#dns.quad9.net 2620:fe::fe#dns.quad9.net 2620:fe::9#dns.quad9.net"
+    [cloudflare]="1.1.1.1#one.one.one.one 1.0.0.1#one.one.one.one 2606:4700:4700::1111#one.one.one.one 2606:4700:4700::1001#one.one.one.one"
+)
 FORCE_NVIDIA=""          # "", "yes", "no"
 ONLY_SECTIONS=""
 SKIP_SECTIONS=""
@@ -101,6 +110,8 @@ FAILED_STEPS=()
 REBOOT_BLOCKED=""        # set ONLY by failures that make rebooting unsafe (NVIDIA module/signing)
 NVM_VERSION="v0.40.3"    # bump when nvm releases; check github.com/nvm-sh/nvm
 PARALLEL_DL=""           # "" = auto-detect from network probe; or forced via --parallel N
+DNS_PROVIDER="quad9"     # --dns: quad9 (default) | cloudflare; used by the privacy section
+DNS_PROVIDER_SET=""      # "yes" when --dns was passed, to warn if privacy is not enabled
 MENU_MODE=""             # "yes" = force the interactive section picker; opens by default on a TTY with no flags
 
 RED='\033[0;31m'; GREEN='\033[0;32m'; YELLOW='\033[1;33m'
@@ -403,6 +414,7 @@ probe_parallel_downloads() {
 # One-line descriptions for the interactive picker (--menu). Keys must match
 # DEFAULT_SECTIONS / OPTIONAL_SECTIONS entries.
 declare -A SECTION_DESC=(
+    [privacy]="encrypted DNS (DNS-over-TLS) — Quad9 by default"
     [base]="dnf tuning, update, RPM Fusion, firmware, boot tweak"
     [codecs]="full ffmpeg, GStreamer, hardware video acceleration"
     [nvidia]="proprietary driver + CUDA/NVENC (auto-skips if no NVIDIA)"
@@ -457,6 +469,7 @@ Flags:
   --skip  a,b,c          Run the defaults EXCEPT these
   --with  a,b,c          Add optional sections to the defaults
   --parallel N           Force dnf parallel downloads (1-20); default: auto-probe
+  --dns PROVIDER         Encrypted DNS for --with privacy: quad9 (default)|cloudflare
   --scx VERB             Gaming scheduler: on|off|status|boot-on|boot-off
   --battery VERB         Charge cap: <40-100>|full|status|apply
   --list                 Print section names only, and exit
@@ -1295,6 +1308,77 @@ section_qol() {
 # ---------------------------------------------------------------------------
 # Optional sections (require --with)
 # ---------------------------------------------------------------------------
+
+section_privacy() {
+    header "PRIVACY — encrypted DNS (DNS-over-TLS via systemd-resolved)"
+
+    local provider="${DNS_PROVIDER:-quad9}"
+    local servers="${DNS_PROVIDERS[$provider]:-}"
+    if [[ -z "$servers" ]]; then
+        err "Unknown DNS provider: $provider (valid: quad9|cloudflare)"
+        FAILED_STEPS+=("privacy: unknown DNS provider $provider")
+        return 1
+    fi
+
+    # systemd-resolved ships with Fedora Workstation but is not enabled by
+    # default; NetworkManager writes /etc/resolv.conf directly. Install it
+    # defensively for minimal installs that stripped the package.
+    if ! rpm -q systemd-resolved >/dev/null 2>&1; then
+        step "systemd-resolved" dnf -y install systemd-resolved
+    fi
+
+    # Drop-in instead of editing resolved.conf: survives package upgrades and
+    # is trivial to remove. DNSOverTLS=yes is strict (a server that cannot
+    # complete the TLS handshake is not used) and FallbackDNS= is emptied so
+    # resolved never silently falls back to plaintext servers.
+    local dropin=/etc/systemd/resolved.conf.d/99-privacy.conf
+    install -d -m 0755 /etc/systemd/resolved.conf.d
+    cat > "$dropin" <<RESOLVED
+# Managed by fedora-postinstall.sh --with privacy
+# Provider: $provider
+[Resolve]
+DNS=$servers
+FallbackDNS=
+DNSOverTLS=yes
+DNSSEC=allow-downgrade
+RESOLVED
+    ok "resolved drop-in written: $dropin ($provider)"
+
+    # Point /etc/resolv.conf at the resolved stub. A regular file (some minimal
+    # images) is backed up once before it is replaced by the symlink.
+    if [[ -f /etc/resolv.conf && ! -L /etc/resolv.conf ]]; then
+        cp -a /etc/resolv.conf /etc/resolv.conf.pre-privacy
+        warn "Backed up /etc/resolv.conf to /etc/resolv.conf.pre-privacy"
+    fi
+    step "Enable systemd-resolved" systemctl enable --now systemd-resolved
+    ln -sfn ../run/systemd/resolve/stub-resolv.conf /etc/resolv.conf
+    ok "/etc/resolv.conf -> ../run/systemd/resolve/stub-resolv.conf"
+
+    # NetworkManager may have started before resolved; reloading its DNS state
+    # makes it switch to the resolved backend without dropping the connection.
+    if command -v nmcli >/dev/null 2>&1; then
+        nmcli general reload dns-rc >/dev/null 2>&1 || true
+    fi
+    step "Restart systemd-resolved" systemctl restart systemd-resolved
+
+    # Verify. A resolution failure is reported as a failed step; a missing DoT
+    # marker is only a warning because the handshake may still be negotiating.
+    if resolvectl query example.com >/dev/null 2>&1; then
+        ok "DNS resolution works through systemd-resolved"
+    else
+        warn "resolvectl query failed — check 'resolvectl status' and $LOG_FILE"
+        FAILED_STEPS+=("privacy: DNS resolution check failed")
+    fi
+    if resolvectl status 2>/dev/null | grep -Eq '\+DNSOverTLS|DNSOverTLS setting: yes'; then
+        ok "DNS-over-TLS active"
+    else
+        warn "DNS-over-TLS not confirmed in 'resolvectl status' (may still be negotiating)"
+    fi
+    resolvectl status 2>/dev/null | grep -E 'Current DNS|DNS Servers|DNSOverTLS' | head -n 5 || true
+
+    ok "Revert: rm -f $dropin && systemctl disable --now systemd-resolved"
+    ok "        ln -sfn ../run/NetworkManager/resolv.conf /etc/resolv.conf"
+}
 
 section_legion() {
     header "LEGION — Lenovo Legion power/fan control"
@@ -2174,6 +2258,11 @@ while [[ $# -gt 0 ]]; do
                        else
                            err "--parallel takes a number 1-20"; exit 1
                        fi ;;
+        --dns)         if [[ -n "${2:-}" && -n "${DNS_PROVIDERS[$2]:-}" ]]; then
+                           DNS_PROVIDER="$2"; DNS_PROVIDER_SET="yes"; shift 2
+                       else
+                           err "--dns takes: quad9|cloudflare"; exit 1
+                       fi ;;
         --scx)         if [[ -z "${2:-}" ]]; then
                            err "--scx needs a verb: on|off|status|boot-on|boot-off"; exit 1
                        elif command -v scx-toggle >/dev/null 2>&1; then
@@ -2216,6 +2305,12 @@ require_root "${ORIGINAL_ARGS[@]}"
 require_fedora
 require_mutable_system
 touch "$LOG_FILE"
+
+# --dns is meaningless without the section that consumes it; say so instead of
+# letting the flag disappear silently.
+if [[ -n "$DNS_PROVIDER_SET" ]] && ! section_enabled privacy; then
+    warn "--dns only applies to the privacy section; add --with privacy"
+fi
 
 header "Fedora post-install (v3) — log: $LOG_FILE"
 log "User: $REAL_USER | GPU(s): $(lspci -nn | grep -Ei 'vga|3d' | sed 's/^[0-9a-f:.]* //' | paste -sd ' | ')"

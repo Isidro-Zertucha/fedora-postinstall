@@ -81,7 +81,7 @@ sudo ./fedora-postinstall.sh --menu
 | `codecs`  | Full `ffmpeg`, GStreamer plugins, and per-GPU hardware video acceleration (AMD / Intel / NVIDIA) |
 | `nvidia`  | Proprietary driver (akmod) + CUDA/NVENC, **driver branch matched to the GPU** (legacy `580xx`/`470xx`/`390xx` for pre-Turing cards), **open kernel modules** (needed for RTX 50-series), and **Secure Boot module signing** (MOK enrollment) — *auto-detected* |
 | `flatpak` | Flathub (unfiltered) + Flatseal, Warehouse (rollback, runtimes, leftover user data) and Gear Lever (AppImage integration), plus Extension Manager on GNOME |
-| `snapper` | Btrfs snapshots + dnf integration + Btrfs Assistant GUI (skipped if root isn't Btrfs) |
+| `snapper` | Btrfs snapshots **around every dnf transaction** (dnf5 actions hook, verified at install time), **Btrfs Assistant** GUI, and a **GRUB snapshot submenu** (`grub-btrfs`) so a broken system can boot back into an older snapshot. Skipped if root isn't Btrfs. See [Snapshots and rollback](#snapshots-and-rollback-default-snapper-section) |
 | `media`   | mpv + yt-dlp (the player and the downloader everyone appreciates), + **EasyEffects** (per-device EQ and mic noise reduction via RNNoise, a PipeWire effect chain) |
 | `virt`    | KVM/QEMU + virt-manager |
 | `qol`     | Archive formats, fonts, monitors (htop/btop/fastfetch + **Mission Center** for per-process GPU, VRAM and encoder load, which the terminal ones can't see), **Obsidian** (notes/PKM, via Flathub), **Aura** live wallpapers (GNOME support experimental), tldr, desktop-matched extras |
@@ -113,6 +113,51 @@ sudo ./fedora-postinstall.sh --menu
 | `photos`     | **Ente Photos**, an end-to-end encrypted photo backup app, installed from verified Flathub (`io.ente.photos`) |
 | `onlyoffice` | ONLYOFFICE Desktop Editors (Flathub). See [Office suite: pick one](#office-suite-pick-one) |
 | `collabora`  | Collabora Office (Flathub). See [Office suite: pick one](#office-suite-pick-one) |
+
+### Snapshots and rollback (default `snapper` section)
+
+This is the only thing in the script that undoes a bad update, so it is a default
+section rather than an opt-in. It does four things:
+
+1. Creates a snapper config for `/` (plus `/home` when that is its own Btrfs subvolume).
+2. Enables `snapper-timeline.timer` **and** `snapper-cleanup.timer`. Fedora ships the
+   first enabled and the second disabled, so snapshots accumulate with nothing pruning them.
+3. Snapshots **every `dnf` transaction** through the dnf5 actions plugin
+   (`/etc/dnf/libdnf5-plugins/actions.d/snapper.actions` plus two small hooks in
+   `/usr/local/bin`). The dnf4 plugin `python3-dnf-plugin-snapper` is deliberately not
+   used: it installs cleanly on Fedora 43+, dnf5 never loads it, and it produces zero
+   snapshots while looking installed.
+4. Adds a **snapshot submenu to GRUB** with `grub-btrfs` (COPR `kylegospo/grub-btrfs` —
+   the package is not in Fedora's own repos) and unhides the boot menu, which Fedora
+   hides after a successful boot.
+
+The section then **verifies the hook**: it runs the pre/post pair once and requires a
+linked snapshot to appear. A rollback plan that was never exercised is a guess.
+
+**Recovery means booting a snapshot, not `snapper rollback`:**
+
+- Choose the snapshot in the GRUB *snapshots* submenu, confirm it boots, then swap the
+  `root` subvolume from inside that session.
+- `snapper rollback` **does nothing on Fedora.** It cannot detect the boot layout
+  (`root`/`home` subvolumes named on the kernel command line), and `--ambit classic`
+  reports success while changing nothing after a reboot.
+- **`/boot` is a separate ext4 partition**, so kernels and initramfs are *not* in the
+  snapshot. A snapshot cannot undo a broken kernel — boot an older one instead (Fedora
+  keeps three plus the rescue kernel by default, `installonly_limit=3`).
+- `/var` sits inside `root` on a stock Workstation, so a root rollback also reverts
+  journals, container images and VM disks.
+
+These are rollback points on the same disk, not backups. Pair them with an off-machine
+copy of `/home`.
+
+Revert:
+
+```bash
+sudo rm -f /etc/dnf/libdnf5-plugins/actions.d/snapper.actions \
+           /usr/local/bin/dnf-snapper-pre /usr/local/bin/dnf-snapper-post
+sudo systemctl disable --now grub-btrfs-watch.path
+sudo dnf copr remove kylegospo/grub-btrfs && sudo dnf -y remove grub-btrfs
+```
 
 ### Encrypted DNS (`--with privacy`)
 

@@ -8,7 +8,8 @@
 #   nvidia   proprietary driver + CUDA/NVENC + Secure Boot signing (auto-detected)
 #   flatpak  Flathub (unfiltered) + Flatseal + Warehouse + Gear Lever
 #            + Extension Manager (GNOME)
-#   snapper  Btrfs snapshots + Btrfs Assistant GUI
+#   snapper  Btrfs snapshots per dnf transaction + GRUB rollback submenu
+#            + Btrfs Assistant GUI
 #   media    mpv (lightweight player), yt-dlp, EasyEffects (EQ + mic de-noising)
 #   virt     KVM/QEMU + virt-manager
 #   qol      archives, fonts (incl. MS core fonts), monitors (htop/btop/Mission
@@ -420,7 +421,7 @@ declare -A SECTION_DESC=(
     [nvidia]="proprietary driver + CUDA/NVENC (auto-skips if no NVIDIA)"
     [flatpak]="Flathub + Flatseal + Warehouse + Gear Lever (+ Ext Manager on GNOME)"
     [gaming]="Steam, gamescope, MangoHud, GameMode, ProtonPlus, Bottles, Heronite"
-    [snapper]="Btrfs snapshots + Btrfs Assistant GUI"
+    [snapper]="Btrfs snapshots per dnf transaction + GRUB rollback submenu"
     [media]="mpv video player, yt-dlp downloads, EasyEffects per-device EQ + RNNoise"
     [streaming]="OBS Studio + virtual camera (v4l2loopback) — screen capture/streaming"
     [dev]="git tooling, Podman-as-Docker + Podman Desktop UI, nvm, uv, Go, VS Code, DBeaver, Orca, OpenCode"
@@ -960,13 +961,23 @@ section_snapper() {
         return
     fi
 
-    step "Install snapper + dnf integration" bash -c \
-        'dnf -y install snapper python3-dnf-plugin-snapper ||
-         dnf -y install snapper libdnf5-plugin-actions'
-
-
+    # libdnf5-plugin-actions, not python3-dnf-plugin-snapper. The Python plugin
+    # is a dnf4 hook: on Fedora 43+ it installs cleanly, dnf5 never loads it, and
+    # every transaction then runs with no snapshot at all. An `||` fallback is
+    # useless here because the install *succeeds* — the failure is silent, and a
+    # silent failure is the one thing a rollback plan cannot have.
+    step "Install snapper + dnf5 actions plugin" \
+        dnf -y install snapper libdnf5-plugin-actions
     step_soft "Btrfs Assistant (GUI for snapshots/rollback)" \
         dnf -y install btrfs-assistant
+
+    # The hooks are inert without the plugin that reads them.
+    if rpm -q libdnf5-plugin-actions >/dev/null 2>&1; then
+        ok "dnf5 actions plugin present — hooks fire on every transaction"
+    else
+        err "libdnf5-plugin-actions missing — no snapshots on dnf transactions"
+        FAILED_STEPS+=("snapper: dnf5 actions plugin missing")
+    fi
 
     if ! snapper list-configs 2>/dev/null | grep -q "^root"; then
         step "Create snapper config for /" snapper -c root create-config /
@@ -977,10 +988,119 @@ section_snapper() {
         fi
     fi
 
+    # Fedora ships the timeline timer enabled and the cleanup timer disabled.
+    # Enabling only the first leaves hourly snapshots accumulating with nothing
+    # to prune them, until they pin every block that ever changed.
     step "Enable snapshot timers" systemctl enable --now \
         snapper-timeline.timer snapper-cleanup.timer
 
+    # ---- Snapshots on every dnf5 transaction ------------------------------
+    # The actions plugin runs these at transaction hooks. The pre and post hooks
+    # are separate processes with no shared state, so the pre snapshot number
+    # travels through a marker file in /run (cleared on boot, which is correct:
+    # a stale number would attach a post snapshot to the wrong pre).
+    local pre=/usr/local/bin/dnf-snapper-pre
+    local post=/usr/local/bin/dnf-snapper-post
+
+    cat > "$pre" <<'SNPRE'
+#!/bin/bash
+# Managed by fedora-postinstall.sh — pre-transaction snapshot marker.
+# Never block the package transaction: a broken hook must not stop a security
+# update, so the status is swallowed and the post hook no-ops on an empty file.
+desc="${SNAPPER_DESC:-dnf transaction}"
+snapper -c root create -t pre -c number -p -d "$desc" \
+    > /run/snapper-dnf-pre 2>/dev/null || true
+SNPRE
+
+    cat > "$post" <<'SNPOST'
+#!/bin/bash
+# Managed by fedora-postinstall.sh — post snapshot, linked to its pre.
+[[ -s /run/snapper-dnf-pre ]] || exit 0
+desc="${SNAPPER_DESC:-dnf transaction}"
+snapper -c root create -t post -c number \
+    --pre-number "$(cat /run/snapper-dnf-pre)" -d "$desc" >/dev/null 2>&1 || true
+rm -f /run/snapper-dnf-pre
+SNPOST
+    chmod 0755 "$pre" "$post"
+
+    # Field layout is callback:package_filter:direction:options:command. The
+    # middle three stay empty so the hook fires on every transaction.
+    install -d -m 0755 /etc/dnf/libdnf5-plugins/actions.d
+    cat > /etc/dnf/libdnf5-plugins/actions.d/snapper.actions <<'SNACT'
+# Managed by fedora-postinstall.sh — snapshot every dnf5 transaction.
+pre_transaction::::/usr/local/bin/dnf-snapper-pre
+post_transaction::::/usr/local/bin/dnf-snapper-post
+SNACT
+    ok "dnf5 pre/post snapshot hooks: /etc/dnf/libdnf5-plugins/actions.d/snapper.actions"
+
+    # ---- Boot into a snapshot from GRUB -----------------------------------
+    # Without a GRUB entry a snapshot is only reachable from a live USB, which
+    # is exactly the situation that a broken update creates. grub-btrfs is not
+    # in Fedora's repos; the COPR build is a noarch package, so the age of its
+    # build number says nothing about whether it works here.
+    if copr_enable_guarded kylegospo/grub-btrfs grub-btrfs &&
+        dnf -y install grub-btrfs >>"$LOG_FILE" 2>&1; then
+        ok "grub-btrfs installed"
+
+        # The packaged grub-btrfs.path carries BindsTo=\x2esnapshots.mount, which
+        # never exists on Fedora: snapper creates /.snapshots as a nested btrfs
+        # subvolume, not a mount. The unit fails, and BindsTo cannot be reset
+        # from a drop-in, so replace it with a plain path unit.
+        systemctl disable --now grub-btrfs.path >>"$LOG_FILE" 2>&1 || true
+        cat > /etc/systemd/system/grub-btrfs-watch.path <<'GRUBPATH'
+[Unit]
+Description=Watch /.snapshots and refresh the GRUB snapshot menu
+
+[Path]
+PathModified=/.snapshots
+Unit=grub-btrfs.service
+
+[Install]
+WantedBy=multi-user.target
+GRUBPATH
+        step "Enable snapshot menu watcher" bash -c \
+            'systemctl daemon-reload && systemctl enable --now grub-btrfs-watch.path'
+
+        # Populate the submenu now instead of waiting for the next snapshot,
+        # then fold it into grub.cfg. Fedora boots via BLS, so this file is not
+        # rewritten by kernel updates and the submenu survives them.
+        systemctl start grub-btrfs.service >>"$LOG_FILE" 2>&1 || true
+        step "Regenerate GRUB with snapshot submenu" \
+            grub2-mkconfig -o /boot/grub2/grub.cfg
+
+        # Fedora hides the menu after a successful boot, so the submenu would be
+        # invisible precisely when it is needed.
+        grub2-editenv - unset menu_auto_hide >>"$LOG_FILE" 2>&1 || true
+
+        if grep -qi 'snapshot' /boot/grub2/grub.cfg 2>/dev/null; then
+            ok "GRUB snapshot submenu present at the boot menu"
+        else
+            err "GRUB snapshot submenu not found in /boot/grub2/grub.cfg"
+            FAILED_STEPS+=("snapper: GRUB submenu not generated")
+        fi
+    else
+        warn "grub-btrfs unavailable — snapshots will not appear in the GRUB menu"
+        FAILED_STEPS+=("snapper: no GRUB entry — recovery needs a live USB")
+    fi
+
+    # ---- Prove the hook fires ---------------------------------------------
+    # A snapshot that was never taken looks identical to one that was, until the
+    # day it is needed. Run the hook pair once and require a linked result.
+    local before after
+    before=$(snapper -c root list 2>/dev/null | wc -l)
+    SNAPPER_DESC="fedora-postinstall hook test" "$pre" >/dev/null 2>&1 || true
+    SNAPPER_DESC="fedora-postinstall hook test" "$post" >/dev/null 2>&1 || true
+    after=$(snapper -c root list 2>/dev/null | wc -l)
+    if [[ "$after" -ge $((before + 2)) ]]; then
+        ok "snapshot hook verified: pre/post pair created and linked"
+    else
+        err "snapshot hook produced no pre/post pair"
+        FAILED_STEPS+=("snapper: dnf5 hook did not create snapshots")
+    fi
+
     ok "Snapshots active. GUI: btrfs-assistant | CLI: snapper list"
+    ok "Recovery: boot a snapshot from GRUB, then swap the 'root' subvolume"
+    ok "Caveats: 'snapper rollback' is a no-op on Fedora; /boot (kernel) is not snapshotted"
 }
 
 section_media() {

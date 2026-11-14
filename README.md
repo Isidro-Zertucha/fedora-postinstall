@@ -179,18 +179,33 @@ sudo ./fedora-postinstall.sh --with privacy --dns cloudflare
 used — and `FallbackDNS=` is emptied so resolved never silently falls back to plaintext.
 **If your network blocks port 853, DNS stops working**; remove the drop-in to revert.
 
+A drop-in alone would not be enough. NetworkManager hands the DHCP resolvers to
+`systemd-resolved` as **per-link** servers, and resolved queries those *in parallel* with
+the global `DNS=` list, preferring the link for routed domains — so your router would still
+receive plaintext queries. The section therefore also sets `ipv4.ignore-auto-dns` and
+`ipv6.ignore-auto-dns` on every Ethernet and Wi-Fi profile, leaving the drop-in as the only
+upstream. Profiles are re-applied in place (no link drop). A profile that carries its own
+static `ipv4.dns` is reported but not rewritten — remove it if you want everything to go
+through the drop-in.
+
 Revert:
 
 ```bash
 sudo rm -f /etc/systemd/resolved.conf.d/99-privacy.conf
 sudo systemctl disable --now systemd-resolved
 sudo ln -sfn ../run/NetworkManager/resolv.conf /etc/resolv.conf
+# Restore the per-connection DNS values the script changed, then re-apply them:
+bash /var/lib/fedora-postinstall/privacy-dns-revert.sh
+sudo systemctl restart NetworkManager
 # If the script backed up a regular resolv.conf, restore it instead of the symlink:
 # sudo mv /etc/resolv.conf.pre-privacy /etc/resolv.conf
 ```
 
 The script backs up a regular `/etc/resolv.conf` to `/etc/resolv.conf.pre-privacy` before
-replacing it with the resolved stub symlink.
+replacing it with the resolved stub symlink. It also generates
+`/var/lib/fedora-postinstall/privacy-dns-revert.sh`, one `nmcli connection modify` line per
+profile with the **exact** values that profile had before the run, so reverting does not
+clobber a per-connection DNS setup you had configured by hand.
 
 ### Office suite: pick one
 

@@ -15,10 +15,15 @@ assert_contains "$SCRIPT" 'flatpak install -y --noninteractive flathub io.ente.p
 assert_contains "$SCRIPT" 'Heronite'
 assert_contains "$SCRIPT" 'Aura'
 assert_contains "$SCRIPT" 'section_photos() {'
-assert_contains "$SCRIPT" 'photos onlyoffice collabora mycomputer'
+assert_contains "$SCRIPT" 'photos onlyoffice collabora mycomputer upscayl'
 assert_contains "$README" 'Heronite'
 assert_contains "$README" 'Aura'
 assert_contains "$README" 'Ente Photos'
+
+# Upscayl is its own opt-in section, installed from Flathub.
+assert_contains "$SCRIPT" 'section_upscayl() {'
+assert_contains "$SCRIPT" 'flatpak install -y --noninteractive flathub org.upscayl.Upscayl'
+assert_contains "$README" 'Upscayl'
 
 if grep -Eq 'Morrow|Safe Disk Cleaner' "$SCRIPT" "$README"; then
     fail 'Morrow and Safe Disk Cleaner were explicitly removed from scope'

@@ -111,6 +111,7 @@ sudo ./fedora-postinstall.sh --menu
 | `browser`    | Brave (Chromium-based, Flathub build from Brave itself). Fedora's default browser stays Firefox; this section only installs an alternative. **No vendor RPM repo, deliberately** — Brave ships one channel with no per-Fedora chroots, the same upgrade risk that keeps ONLYOFFICE/Collabora off their vendor repos |
 | `filesharing`| LocalSend (AirDrop-style device-to-device transfer over the LAN, no account — Flathub), FreeFileSync + RealTimeSync (comparison-first sync, Flathub), and Syncthing (continuous, private sync across your own devices — from Fedora's own repos, enabled per-user at boot, web UI at `localhost:8384`) |
 | `photos`     | **Ente Photos**, an end-to-end encrypted photo backup app, installed from verified Flathub (`io.ente.photos`) |
+| `upscayl`    | **Upscayl**, a free and open-source AI image upscaler, installed from Flathub (`org.upscayl.Upscayl`) |
 | `onlyoffice` | ONLYOFFICE Desktop Editors (Flathub). See [Office suite: pick one](#office-suite-pick-one) |
 | `collabora`  | Collabora Office (Flathub). See [Office suite: pick one](#office-suite-pick-one) |
 

@@ -93,7 +93,7 @@ set -uo pipefail
 LOG_FILE="/var/log/fedora-postinstall.log"
 REPO_RAW="https://raw.githubusercontent.com/Isidro-Zertucha/fedora-postinstall/main/fedora-postinstall.sh"
 DEFAULT_SECTIONS=(base codecs nvidia flatpak snapper media virt qol)
-OPTIONAL_SECTIONS=(privacy legion asus battery peripherals distrobox dev wine lutris heroic faugus gametweaks gaming streaming creative communication music reading browser filesharing photos onlyoffice collabora mycomputer)
+OPTIONAL_SECTIONS=(privacy legion asus battery peripherals distrobox dev wine lutris heroic faugus gametweaks gaming streaming creative communication music reading browser filesharing photos onlyoffice collabora mycomputer upscayl)
 
 # Encrypted DNS providers for the optional `privacy` section. Each value is the
 # systemd-resolved DNS= list; the #hostname suffix is what lets resolved verify
@@ -2338,6 +2338,19 @@ section_photos() {
     # Ente Photos is verified on Flathub (io.ente.photos).
     step "Ente Photos (end-to-end encrypted photo backup)" \
         flatpak install -y --noninteractive flathub io.ente.photos
+}
+
+section_upscayl() {
+    header "UPSCAYL — AI image upscaling (Flathub)"
+
+    # Upscayl is published on Flathub by its own upstream and updates with the
+    # rest of the Flatpak set via update-all. It has no vendor RPM repo and needs
+    # no host integration. This section is optional and can run alone
+    # (--only upscayl), so ensure Flathub exists instead of assuming the
+    # 'flatpak' section ran first.
+    step "Flatpak + Flathub" ensure_flatpak
+    step "Upscayl (AI image upscaler)" \
+        flatpak install -y --noninteractive flathub org.upscayl.Upscayl
 }
 
 # Both office sections exist because the choice is genuinely a fork, not a

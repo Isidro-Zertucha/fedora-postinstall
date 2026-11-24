@@ -49,6 +49,8 @@
 #               Pick ONE of the two: both sit next to Fedora's own LibreOffice.
 #   mycomputer  "My Computer" drives/volumes panel for GNOME Files (Nautilus
 #               extension, upstream COPR — needs Fedora 43+ and Nautilus)
+#   aurora      Aurora game launcher — BETA, pinned 1.0.0-rc4 Fedora RPM.
+#               Release candidate, NOT for daily use. Opt-in only.
 #
 # Runtime toggles (after gametweaks is installed):
 #   sudo ./fedora-postinstall.sh --scx on|off|status|boot-on|boot-off
@@ -93,7 +95,7 @@ set -uo pipefail
 LOG_FILE="/var/log/fedora-postinstall.log"
 REPO_RAW="https://raw.githubusercontent.com/Isidro-Zertucha/fedora-postinstall/main/fedora-postinstall.sh"
 DEFAULT_SECTIONS=(base codecs nvidia flatpak snapper media virt qol)
-OPTIONAL_SECTIONS=(privacy legion asus battery peripherals distrobox dev wine lutris heroic faugus gametweaks gaming streaming creative communication music reading browser filesharing photos onlyoffice collabora mycomputer upscayl)
+OPTIONAL_SECTIONS=(privacy legion asus battery peripherals distrobox dev wine lutris heroic faugus gametweaks gaming streaming creative communication music reading browser filesharing photos onlyoffice collabora mycomputer upscayl aurora)
 
 # Encrypted DNS providers for the optional `privacy` section. Each value is the
 # systemd-resolved DNS= list; the #hostname suffix is what lets resolved verify
@@ -448,6 +450,7 @@ declare -A SECTION_DESC=(
     [onlyoffice]="ONLYOFFICE — OOXML-native suite (pick one office suite)"
     [collabora]="Collabora Office — LibreOffice-derived (pick one office suite)"
     [mycomputer]="'My Computer' drives panel for GNOME Files (Nautilus)"
+    [aurora]="Aurora game launcher — BETA (pinned 1.0.0-rc4), not for daily use"
 )
 
 # Help text. Deliberately NOT parsed out of the file's own header: run remotely
@@ -2351,6 +2354,26 @@ section_upscayl() {
     step "Flatpak + Flathub" ensure_flatpak
     step "Upscayl (AI image upscaler)" \
         flatpak install -y --noninteractive flathub org.upscayl.Upscayl
+}
+
+section_aurora() {
+    header "AURORA — game launcher (BETA — 1.0.0-rc4, not a daily driver)"
+
+    # Pinned on purpose: this is a release candidate, and a newer stable tag
+    # must not silently replace the version this section was written for.
+    # The release SHA256SUMS.txt only covers the Windows assets, so the digest
+    # below is the GitHub release API asset digest for the Fedora RPM.
+    warn "Aurora 1.0.0-rc4 is a release candidate — expect rough edges, do not rely on it daily."
+    step "Aurora (BETA — 1.0.0-rc4, Fedora RPM)" bash -c '
+        url="https://github.com/mollie2999/Aurora/releases/download/v1.0.0-rc4/aurora-1.0.0-rc4-1.x86_64.rpm"
+        sha="1ea6d770947935ce1dcf74480144561bdcaba10fa036a8b89cfe5917e8a75890"
+        tmp=$(mktemp -d) || exit
+        trap '\''rm -rf "$tmp"'\'' EXIT
+        rpm="$tmp/aurora.rpm"
+        curl -fsSL "$url" -o "$rpm" || exit
+        printf "%s  %s\n" "$sha" "$rpm" | sha256sum -c - || exit
+        dnf -y install "$rpm"
+    '
 }
 
 # Both office sections exist because the choice is genuinely a fork, not a

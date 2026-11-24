@@ -25,6 +25,19 @@ assert_contains "$SCRIPT" 'section_upscayl() {'
 assert_contains "$SCRIPT" 'flatpak install -y --noninteractive flathub org.upscayl.Upscayl'
 assert_contains "$README" 'Upscayl'
 
+# Aurora is a pinned BETA opt-in: it must not appear in the default set, and
+# its Fedora RPM is installed only after verifying the release asset digest.
+assert_contains "$SCRIPT" 'mycomputer upscayl aurora'
+assert_contains "$SCRIPT" 'section_aurora() {'
+assert_contains "$SCRIPT" '[aurora]="Aurora game launcher — BETA (pinned 1.0.0-rc4), not for daily use"'
+assert_contains "$SCRIPT" 'aurora-1.0.0-rc4-1.x86_64.rpm'
+assert_contains "$SCRIPT" '1ea6d770947935ce1dcf74480144561bdcaba10fa036a8b89cfe5917e8a75890'
+assert_contains "$README" '| `aurora`'
+assert_contains "$README" 'BETA — release candidate, not for daily use'
+if grep -Eq '^DEFAULT_SECTIONS=.*aurora' "$SCRIPT"; then
+    fail 'aurora is a beta and must not be a default section'
+fi
+
 if grep -Eq 'Morrow|Safe Disk Cleaner' "$SCRIPT" "$README"; then
     fail 'Morrow and Safe Disk Cleaner were explicitly removed from scope'
 fi
